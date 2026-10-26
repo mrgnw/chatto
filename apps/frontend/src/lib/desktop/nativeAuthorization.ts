@@ -5,24 +5,63 @@ import { oauthPopupResponseFromURL, type OAuthPopupResponse } from '$lib/oauth/p
 export const MOBILE_CLIENT_ID = 'eu.chattocorp.chatto.mobile';
 export const MOBILE_CALLBACK = 'eu.chattocorp.chatto.mobile:/oauth/callback';
 
-const nativeAuthorization = registerPlugin<{
+/** A host that signs in through a system authentication session instead of a popup. */
+export type NativeAuthorization = {
+  clientId: string;
+  callback: string;
+  /** Native code owns presentation, cancellation, and the bounded session lifetime. */
+  authorize(url: string, state: string): Promise<OAuthPopupResponse>;
+};
+
+const mobilePlugin = registerPlugin<{
   authorize(options: { url: string }): Promise<{ url: string }>;
 }>('ChattoAuthorization');
 
 /** Detect the narrow authentication capability, independently of other host features. */
-export function hasNativeAuthorization(): boolean {
-  return Capacitor.isPluginAvailable('ChattoAuthorization');
+export function nativeAuthorization(): NativeAuthorization | null {
+  if (Capacitor.isPluginAvailable('ChattoAuthorization')) {
+    return host(MOBILE_CLIENT_ID, MOBILE_CALLBACK, async (url) => {
+      const result = await mobilePlugin.authorize({ url });
+      return result?.url;
+    });
+  }
+  return null;
+}
+
+function host(
+  clientId: string,
+  callback: string,
+  authorize: (url: string) => Promise<unknown>
+): NativeAuthorization {
+  return {
+    clientId,
+    callback,
+    authorize: async (url, state) => {
+      const result = await authorize(url);
+      if (typeof result !== 'string') throw new Error('Invalid sign-in callback.');
+      return validateNativeCallback(result, callback, state);
+    }
+  };
 }
 
 /** Reject unrelated callbacks before an authorization code can reach the token endpoint. */
-export function validateNativeCallback(callback: string, state: string): OAuthPopupResponse {
+export function validateNativeCallback(
+  callback: string,
+  expectedCallback: string,
+  state: string
+): OAuthPopupResponse {
   const url = new URL(callback);
+  const expected = new URL(expectedCallback);
   if (
-    `${url.protocol}${url.pathname}` !== MOBILE_CALLBACK ||
-    url.host ||
+    url.protocol !== expected.protocol ||
+    url.host !== expected.host ||
+    url.pathname !== expected.pathname ||
     url.username ||
     url.password ||
     url.hash ||
+    [...expected.searchParams].some(
+      ([name, value]) => url.searchParams.getAll(name).join() !== value
+    ) ||
     url.searchParams.getAll('state').length !== 1 ||
     url.searchParams.getAll('code').length > 1 ||
     url.searchParams.getAll('error').length > 1
@@ -34,11 +73,4 @@ export function validateNativeCallback(callback: string, state: string): OAuthPo
     throw new Error('Invalid sign-in callback.');
   }
   return response;
-}
-
-/** Native code owns presentation, cancellation, and the bounded session lifetime. */
-export async function authorizeNatively(url: string, state: string): Promise<OAuthPopupResponse> {
-  const result = await nativeAuthorization.authorize({ url });
-  if (typeof result?.url !== 'string') throw new Error('Invalid sign-in callback.');
-  return validateNativeCallback(result.url, state);
 }
