@@ -209,7 +209,7 @@ mise desktop-build
 ```
 
 This places the executable in a background application at
-`Chatto Desktop.app/Contents/Helpers/Chatto Capture Helper.app`. The helper has
+`Chatto Desktop.app/Contents/Helpers/Chatto Helper.app`. The helper has
 the stable bundle identifier `run.chatto.desktop.capture-helper`, and the
 packager signs it in dependency order with the rest of the Electron bundle.
 Local and pull-request artifacts use ad-hoc signing; release artifacts use a

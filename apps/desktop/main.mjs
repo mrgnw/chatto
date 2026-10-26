@@ -404,7 +404,7 @@ function cancelActiveGameCaptureSourceList() {
 function macOSCaptureHelperExecutable() {
   return path.resolve(
     process.resourcesPath,
-    '../Helpers/Chatto Capture Helper.app/Contents/MacOS/chatto-macos-capture-probe'
+    '../Helpers/Chatto Helper.app/Contents/MacOS/chatto-macos-capture-probe'
   );
 }
 
