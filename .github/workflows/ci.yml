@@ -378,7 +378,7 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         run: |
-          helper="apps/desktop/dist/Chatto Desktop.app/Contents/Helpers/Chatto Capture Helper.app/Contents/MacOS/chatto-macos-capture-probe"
+          helper="apps/desktop/dist/Chatto Desktop.app/Contents/Helpers/Chatto Helper.app/Contents/MacOS/chatto-macos-capture-probe"
           test -x "$helper"
           "$helper" help | grep -F 'publish --window'
           otool -l "$helper" | grep -F '@executable_path/../Frameworks'

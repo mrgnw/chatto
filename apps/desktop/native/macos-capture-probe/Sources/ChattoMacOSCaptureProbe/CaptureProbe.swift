@@ -56,6 +56,7 @@ struct CaptureOptions {
 
 private enum Command {
   case help
+  case authorize
   case list
   case listJSON
   case listPreviews
@@ -68,6 +69,11 @@ private enum Command {
     }
 
     switch command {
+    case "authorize":
+      guard arguments.count == 1 else {
+        throw ProbeError.invalidArguments("The authorize command takes no options.\n\n\(usage)")
+      }
+      return .authorize
     case "list":
       guard arguments.count == 1 else {
         throw ProbeError.invalidArguments("The list command takes no options.\n\n\(usage)")
@@ -253,6 +259,7 @@ private let usage = """
     chatto-macos-capture-probe capture --application <bundle-id> [--on-display <id>] [capture options]
     chatto-macos-capture-probe publish --window <id> --expected-window-bundle <bundle-id> [capture options]
     chatto-macos-capture-probe publish --display <id> [capture options]
+    chatto-macos-capture-probe authorize   Sign in through the system browser; reads the URL from stdin
 
   Capture options:
     --duration <seconds>   Capture duration (default: 15)
@@ -636,6 +643,9 @@ private struct CaptureProbe {
         print(usage)
         return
       }
+      if case .authorize = command {
+        AuthorizationSession.main()
+      }
       NSApplication.shared.setActivationPolicy(.prohibited)
       let content = try await SCShareableContent.excludingDesktopWindows(
         false,
@@ -643,7 +653,7 @@ private struct CaptureProbe {
       )
 
       switch command {
-      case .help:
+      case .help, .authorize:
         break
       case .list:
         list(content)

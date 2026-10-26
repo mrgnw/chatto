@@ -40,6 +40,8 @@ export type NativeScreenSharePublisherRequest = {
 };
 
 type ChattoDesktopBridge = {
+  /** System-browser sign-in; see `nativeAuthorization.ts`. */
+  authorization?: { authorize(url: string): Promise<string> };
   screenShare: {
     listSources(): Promise<NativeScreenShareSourceResponse>;
     cancelSourceList?(): void;
