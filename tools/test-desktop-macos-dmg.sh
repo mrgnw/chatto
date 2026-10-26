@@ -22,4 +22,4 @@ test "$(readlink "$mountpoint/Applications")" = /Applications
 ditto "$mountpoint/Chatto.app" "$scratch/Chatto.app"
 codesign --verify --deep --strict --verbose=2 "$scratch/Chatto.app"
 test "$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$scratch/Chatto.app/Contents/Info.plist")" = run.chatto.desktop
-test -x "$scratch/Chatto.app/Contents/Helpers/Chatto Capture Helper.app/Contents/MacOS/chatto-macos-capture-probe"
+test -x "$scratch/Chatto.app/Contents/Helpers/Chatto Helper.app/Contents/MacOS/chatto-macos-capture-probe"

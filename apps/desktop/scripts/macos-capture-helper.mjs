@@ -6,14 +6,15 @@ import { chmod, copyFile, cp, mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const macOSCaptureHelperAppName = 'Chatto Capture Helper.app';
+export const macOSCaptureHelperAppName = 'Chatto Helper.app';
 export const macOSCaptureHelperExecutable = 'chatto-macos-capture-probe';
 
 const scriptsRoot = path.dirname(fileURLToPath(import.meta.url));
 const probeRoot = path.resolve(scriptsRoot, '../native/macos-capture-probe');
 
 /**
- * Builds the ScreenCaptureKit probe and embeds it as a nested background app.
+ * Builds the native helper and embeds it as a nested background app. Its name
+ * appears in the macOS sign-in consent sheet, so it names the product, not a task.
  * The surrounding Electron packager signs this bundle with the rest of Chatto.
  */
 export async function embedMacOSCaptureHelper(
@@ -71,7 +72,7 @@ function helperInfoPlist({ shortVersion, bundleVersion, bundleIdentifier }) {
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
   <key>CFBundleDisplayName</key>
-  <string>Chatto Capture Helper</string>
+  <string>Chatto Helper</string>
   <key>CFBundleExecutable</key>
   <string>${macOSCaptureHelperExecutable}</string>
   <key>CFBundleIdentifier</key>
@@ -79,7 +80,7 @@ function helperInfoPlist({ shortVersion, bundleVersion, bundleIdentifier }) {
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>Chatto Capture Helper</string>
+  <string>Chatto Helper</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>
