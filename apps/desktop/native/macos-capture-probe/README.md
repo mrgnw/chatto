@@ -187,6 +187,18 @@ could not maintain the requested input cadence. Each variant uses a new encoder
 session; no encoded output is reused across variants. Existing output directories
 are rejected to protect prior measurements.
 
+## System-browser sign-in
+
+The `authorize` command hosts the macOS sign-in for Chatto Desktop. It reads one
+HTTPS authorization URL for the built-in `chatto://desktop` client from standard
+input, opens it in an `ASWebAuthenticationSession`, and prints the exact
+`chatto://desktop/servers/callback` URL to standard output. Electron keeps the
+OAuth state and PKCE verifier and exchanges the code. The helper never logs the
+URLs it handles. It exits with status 1 when the person cancels, closes its
+window, or the five-minute limit passes, and with status 2 for a URL that is
+not a desktop authorization request. The command needs an app bundle; a bare
+executable has no presentation anchor.
+
 ## Chatto Desktop integration
 
 The helper is an official part of every macOS Chatto Desktop build. Build the
