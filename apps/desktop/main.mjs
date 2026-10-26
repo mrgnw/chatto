@@ -31,7 +31,12 @@ import {
   parseMacOSGameCaptureSources,
   supportsMacOSGameCapture
 } from './game_capture.mjs';
-import { hasAppOrigin, isAuthorizationLaunchUrl, isDesktopPermissionAllowed } from './security.mjs';
+import { hasAppOrigin, isDesktopPermissionAllowed } from './security.mjs';
+import {
+  authorizationAuthorizeChannel,
+  authorizationCallbackFromArgv,
+  PendingAuthorizations
+} from './authorization.mjs';
 import packageJson from './package.json' with { type: 'json' };
 import { desktopBuildProfile } from './build_profile.mjs';
 import { StreamDiagnostics } from './stream_diagnostics.mjs';
@@ -56,6 +61,8 @@ let mainWindow;
 let activeGameCaptureSession;
 let activeGameCaptureSourceList;
 const gameCaptureSourceOffers = new MacOSGameCaptureSourceOffers();
+const pendingAuthorizations = new PendingAuthorizations();
+const gameCaptureFlag = '--chatto-game-capture';
 const macOSCaptureProbeListFlag = '--chatto-macos-capture-probe-list';
 const macOSCapturePocFlag = '--chatto-macos-capture-poc';
 
@@ -77,6 +84,12 @@ protocol.registerSchemesAsPrivileged([
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
+  // macOS delivers chatto:// URLs here. Register before ready so none is lost.
+  app.on('open-url', (event, url) => {
+    event.preventDefault();
+    receiveAuthorizationCallback(url);
+  });
+  registerUrlScheme();
   // Electron does not finish becoming ready until the ESM main module has
   // loaded, so awaiting app.whenReady() at module scope would deadlock startup.
   void start().catch((error) => {
@@ -117,13 +130,15 @@ async function start() {
   );
   configureSession(session.defaultSession);
   configureGameCaptureIPC();
+  configureAuthorizationIPC();
   mainWindow = createMainWindow();
   configureDiagnosticsMenu();
 
-  app.on('second-instance', () => {
-    if (!mainWindow) return;
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.focus();
+  // Windows and Linux deliver chatto:// URLs as the second instance's argv.
+  app.on('second-instance', (_event, argv) => {
+    focusMainWindow();
+    const callback = authorizationCallbackFromArgv(argv);
+    if (callback) receiveAuthorizationCallback(callback);
   });
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) mainWindow = createMainWindow();
@@ -450,6 +465,7 @@ function createMainWindow() {
     if (mainWindow === window) {
       cancelActiveGameCaptureSourceList();
       stopActiveGameCaptureSession();
+      pendingAuthorizations.cancelAll('The window was closed before sign-in completed.');
       mainWindow = undefined;
     }
   });
@@ -458,11 +474,87 @@ function createMainWindow() {
 }
 
 function mainWindowWebPreferences() {
-  const preferences = secureWebPreferences();
-  if (isGameCaptureAvailable()) {
-    preferences.preload = path.join(desktopRoot, 'preload.cjs');
+  return {
+    ...secureWebPreferences(),
+    preload: path.join(desktopRoot, 'preload.cjs'),
+    additionalArguments: isGameCaptureAvailable() ? [gameCaptureFlag] : []
+  };
+}
+
+function focusMainWindow() {
+  if (!mainWindow) return;
+  if (mainWindow.isMinimized()) mainWindow.restore();
+  mainWindow.show();
+  mainWindow.focus();
+}
+
+/**
+ * Claim the chatto:// scheme for this executable, so the browser can return
+ * the OAuth callback. An unpackaged macOS Electron has no bundle that
+ * declares the scheme; claiming it there would route callbacks to the bare
+ * Electron binary.
+ */
+function registerUrlScheme() {
+  if (process.platform === 'darwin' && !app.isPackaged) return;
+  if (process.defaultApp && process.argv.length >= 2) {
+    app.setAsDefaultProtocolClient('chatto', process.execPath, [path.resolve(process.argv[1])]);
+    return;
   }
-  return preferences;
+  app.setAsDefaultProtocolClient('chatto');
+}
+
+function receiveAuthorizationCallback(url) {
+  if (!pendingAuthorizations.complete(url)) return;
+  focusMainWindow();
+}
+
+function isMainRendererEvent(event) {
+  return (
+    mainWindow !== undefined &&
+    event.sender === mainWindow.webContents &&
+    hasAppOrigin(event.senderFrame?.url)
+  );
+}
+
+/**
+ * Open a sign-in URL in the system browser and wait for its chatto:// callback.
+ * A sheet on the main window lets the user cancel while waiting; it closes by
+ * itself when the callback arrives.
+ */
+function configureAuthorizationIPC() {
+  ipcMain.handle(authorizationAuthorizeChannel, async (event, request) => {
+    if (!isMainRendererEvent(event)) {
+      throw new Error('System-browser sign-in is available only to the Chatto renderer.');
+    }
+    const url = typeof request?.url === 'string' ? request.url : '';
+    if (!isWebUrl(url)) throw new Error('The sign-in URL must use HTTP or HTTPS.');
+    const state = request?.state;
+    const callback = pendingAuthorizations.begin(state);
+    callback.catch(() => {});
+
+    const dialogClose = new AbortController();
+    void dialog
+      .showMessageBox(mainWindow, {
+        type: 'info',
+        title: 'Sign in',
+        message: 'Continue signing in with your browser.',
+        detail: 'Chatto Desktop returns here when you finish.',
+        buttons: ['Cancel'],
+        noLink: true,
+        signal: dialogClose.signal
+      })
+      .then(() => pendingAuthorizations.cancel(state));
+
+    try {
+      await shell.openExternal(url);
+      return { url: await callback };
+    } catch (error) {
+      pendingAuthorizations.cancel(state, 'The browser could not be opened.');
+      throw error;
+    } finally {
+      dialogClose.abort();
+    }
+  });
 }
 
 function configureGameCaptureIPC() {
@@ -713,23 +805,11 @@ function protectNavigation(window) {
     if (isWebUrl(target)) void shell.openExternal(target);
   });
 
+  // Sign-in uses the system browser (configureAuthorizationIPC), so no
+  // child window is ever allowed.
   window.webContents.setWindowOpenHandler(({ url }) => {
-    if (!isAuthorizationLaunchUrl(url)) {
-      if (isWebUrl(url)) void shell.openExternal(url);
-      return { action: 'deny' };
-    }
-    return {
-      action: 'allow',
-      overrideBrowserWindowOptions: { webPreferences: secureWebPreferences() }
-    };
-  });
-
-  window.webContents.on('did-create-window', (child) => {
-    child.webContents.on('will-navigate', (event, target) => {
-      if (isWebUrl(target) || hasAppOrigin(target)) return;
-      event.preventDefault();
-    });
-    child.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+    if (isWebUrl(url)) void shell.openExternal(url);
+    return { action: 'deny' };
   });
 }
 

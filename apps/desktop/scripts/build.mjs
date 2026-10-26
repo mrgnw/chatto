@@ -42,6 +42,8 @@ const [bundleRoot] = await packager({
   appVersion: macVersions?.shortVersion ?? packageJson.version,
   buildVersion: macVersions?.bundleVersion ?? releaseBuildVersion(packageJson.version),
   appBundleId: profile.bundleIdentifier,
+  // Declares CFBundleURLTypes so macOS can return chatto:// OAuth callbacks.
+  protocols: [{ name: 'Chatto', schemes: ['chatto'] }],
   afterCopy: [
     async ({ buildPath }) => {
       // Electron reads this metadata before main starts. Separate names also

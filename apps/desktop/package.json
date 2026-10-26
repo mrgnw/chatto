@@ -11,7 +11,7 @@
   "scripts": {
     "build:windows-installer": "node scripts/windows-installer.mjs",
     "build": "install-electron && node scripts/build.mjs",
-    "check": "node --check main.mjs && node --check preload.cjs && node --check frontend_protocol.mjs && node --check game_capture.mjs && node --check scripts/build.mjs && node --check scripts/macos-capture-helper.mjs && node --test",
+    "check": "node --check main.mjs && node --check preload.cjs && node --check frontend_protocol.mjs && node --check authorization.mjs && node --check game_capture.mjs && node --check scripts/build.mjs && node --check scripts/macos-capture-helper.mjs && node --test",
     "dev": "electron ."
   },
   "devDependencies": {
