@@ -22,9 +22,11 @@ system-browser authentication, and clean-machine media behavior are hardened.
 - On launch, restored authenticated servers reconcile in the background so the
   welcome screen can show their availability without selecting one. Desktop
   remains on the welcome screen until the person chooses a server.
-- Connecting a server starts Chatto's PKCE-protected OAuth flow in a separate
-  Electron window. The remote server continues to own the visible sign-in and
-  consent pages.
+- Connecting a server starts Chatto's PKCE-protected OAuth flow. On macOS,
+  the native helper opens it in a system browser authentication session, so
+  passkeys and the person's existing browser sessions work. Other platforms
+  open a separate Electron window. The remote server continues to own the
+  visible sign-in and consent pages.
 - Voice calls, camera video, screen sharing, and media-device selection use
   Electron's bundled Chromium WebRTC implementation. Camera and microphone
   requests use operating-system permission prompts; screen sharing requires an
@@ -128,8 +130,11 @@ system-browser authentication, and clean-machine media behavior are hardened.
 - Servers recognize the built-in `chatto://desktop` OAuth client and its exact
   callback. Desktop API and realtime access use bearer credentials and require
   no origin configuration.
-- Identity providers that reject embedded user agents are not supported until
-  Chatto Desktop gains a system-browser authorization handoff.
+- The macOS helper accepts only an authorization URL for the built-in desktop
+  client and returns only its exact callback. The OAuth state and PKCE verifier
+  stay in the renderer, which validates the callback and exchanges the code.
+  Identity providers that reject embedded user agents are not supported on
+  Windows and Linux.
 
 ## Design Decisions
 
@@ -180,16 +185,23 @@ remote server navigation. Chatto servers trust only its exact callback path.
 clients using this identity require the corresponding Chatto 0.5 server
 behavior.
 
-### 4. Keep the browser OAuth-window flow
+### 4. Keep the browser OAuth-window flow, with a macOS system-browser session
 
-**Decision:** Both browser and Electron deployments use the frontend's ordinary
-`window.open()` authorization flow and the same PKCE and callback handling.
+**Decision:** Browser and Electron deployments share the frontend's PKCE and
+callback handling. Without a native capability, the frontend uses its ordinary
+`window.open()` authorization flow. On macOS, the embedded helper's `authorize`
+command runs `ASWebAuthenticationSession` for the same built-in desktop client
+and callback, and the renderer exchanges the code as before.
 **Why:** Electron implements browser popup windows, so the desktop host no
-longer needs the privileged CEF bridge introduced by the Deno prototype.
-**Tradeoff:** Some providers still require a system-browser flow, and the host
-must tightly constrain popup and navigation behavior. The host opens a new
-window only on the frontend's `/servers/authorize` launch page and sends all
-other window requests to the system browser.
+longer needs the privileged CEF bridge introduced by the Deno prototype. Its
+embedded renderer cannot use platform passkeys. `ASWebAuthenticationSession`
+delivers the private-scheme callback to the starting process without
+registering `chatto` with the operating system.
+**Tradeoff:** The session needs a visible anchor window, so the helper shows a
+small cancel window and macOS asks for consent to use the server's domain.
+Windows and Linux keep the Electron window. The host opens a new window only on
+the frontend's `/servers/authorize` launch page and sends all other window
+requests to the system browser.
 
 ### 5. Synchronize Desktop and Chatto releases
 
@@ -304,7 +316,7 @@ The iOS shell shares the frontend but uses native system authentication. See
 ## Open Questions
 
 - How system-browser OAuth callbacks and normal external links should return to
-  or focus the application on every platform.
+  or focus the application on Windows and Linux.
 - Which automatic-update strategy and macOS/Linux installers should follow the
   Windows installer and downloadable archives.
 - Whether Electron's shipped codec set covers every media artifact Chatto

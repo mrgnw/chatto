@@ -28,12 +28,11 @@ import { LOOPBACK_OAUTH_CLIENT_ID } from '$lib/auth/loopbackClient';
 import { resumePushRegistrationAfterAuthentication } from '$lib/notifications/pushRegistrationCoordinator';
 import { saveReturnUrl } from './returnNavigation';
 import { oauthBearerSession, persistedBearerSession } from '@chatto/client/auth/bearerSession';
-import { nativeAuthorization } from '$lib/desktop/nativeAuthorization';
+import { DESKTOP_CLIENT_ID, nativeAuthorization } from '$lib/desktop/nativeAuthorization';
 import { m } from '$lib/i18n/messages';
 
 const POPUP_POLL_INTERVAL_MS = 250;
 const POPUP_TIMEOUT_MS = 5 * 60 * 1000;
-const DESKTOP_CLIENT_ID = 'chatto://desktop';
 const FRONTEND_CIMD_PATH = '/oauth/frontend-client-metadata.json';
 
 class OAuthPopupError extends Error {}
