@@ -50,12 +50,15 @@ state. Chatto servers trust the exact official callback
 OAuth redirect trust. The fixed `chatto://desktop` client identity and callback
 need no server configuration; API and realtime access use bearer credentials.
 
-OAuth keeps the frontend's ordinary `window.open()` flow, PKCE, consent,
-callback validation, `BroadcastChannel` response, token exchange, and bearer
-storage. The host allows the blank popup created synchronously by the frontend,
-then permits HTTP or HTTPS navigation inside that child while denying nested
-windows. Main-window navigation away from the app origin is denied and normal
-web links open in the system browser.
+OAuth keeps the frontend's PKCE, consent, callback validation, token exchange,
+and bearer storage. The host runs the authorization in the system browser: a
+narrow `authorization` bridge opens the authorization URL externally, the
+operating system delivers the `chatto://desktop/servers/callback` URL to the
+application, and the host returns it only to the sign-in whose `state` waits
+for it. The host registers the `chatto` URL scheme for this purpose. The host
+opens no child window; main-window navigation away from the app origin is
+denied and every window request and normal web link opens in the system
+browser. See FDR-034, decision 4.
 
 The host grants camera, microphone, notification, clipboard write, and fullscreen
 permission only to the fixed app origin. Clipboard reads and automatic fullscreen
@@ -89,5 +92,6 @@ conflict with another local service. Because ordinary HTTPS is not intercepted,
 remote redirects and browser networking retain their native semantics.
 
 Desktop clients using the custom callback require Chatto 0.5 or newer;
-older servers reject its non-HTTPS redirect URI. Identity providers that reject
-embedded user agents still require a future system-browser OAuth handoff.
+older servers reject its non-HTTPS redirect URI. Because sign-in runs in the
+system browser, identity providers that reject embedded user agents or that
+depend on the browser's passkeys work without Electron-specific support.

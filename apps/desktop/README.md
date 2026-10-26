@@ -16,11 +16,13 @@ durable namespace on every launch. Electron does not intercept ordinary HTTP
 or HTTPS traffic, so requests to Chatto servers use Chromium's normal network
 stack.
 
-The official desktop origin is accepted by Chatto's OAuth redirect policy. The
-desktop shell uses Electron's ordinary popup support for the same PKCE and
-`BroadcastChannel` flow as a browser. Chatto 0.5 servers recognize the built-in
-`chatto://desktop` client identity and exact callback; bearer-authenticated API
-and realtime access requires no server origin configuration.
+The official desktop origin is accepted by Chatto's OAuth redirect policy.
+Server sign-in opens in the system browser, which returns to the application
+through the `chatto://desktop/servers/callback` URL; the frontend keeps the
+same PKCE and token exchange as a browser. Chatto 0.5 servers recognize the
+built-in `chatto://desktop` client identity and exact callback;
+bearer-authenticated API and realtime access requires no server origin
+configuration.
 
 ## Run it
 
@@ -33,6 +35,30 @@ mise desktop-dev
 The task builds the shared frontend and opens it in Electron. Electron stores
 the default session beneath the platform's application-data directory for
 `Chatto Desktop`; the shell writes no separate credentials or settings file.
+
+### Test the system-browser sign-in
+
+Sign-in opens the server's authorization page in the default browser. The
+browser then opens `chatto://desktop/servers/callback?...`, and the operating
+system hands that URL to the running application.
+
+On Windows and Linux, `mise desktop-dev` registers the unpackaged Electron
+executable as the `chatto://` handler at start, so the handoff works from the
+development command. On macOS, only an application bundle can register a URL
+scheme, so the unpackaged `mise desktop-dev` build cannot receive the
+callback. Test the handoff on macOS with the packaged development build:
+
+```sh
+mise desktop-run-dev
+```
+
+The running application claims `chatto://` at start, so the dev build and the
+official build take the scheme from one another. Start the one you test. Then
+add a server, choose **Log in to server**, sign in in the browser, and confirm
+that the application comes to the front and shows the server. A sheet on the
+application window offers **Cancel** while it waits. Closing the browser tab
+without finishing leaves the sheet open until **Cancel** or the five-minute
+limit.
 
 ## Verify and build
 
@@ -343,13 +369,14 @@ Electron allows camera, microphone, notification, clipboard write, and fullscree
 permission requests only for the fixed app origin. Clipboard reads and automatic
 fullscreen without a user gesture remain blocked.
 Screen sharing presents a native source picker.
-Navigation outside the app is restricted to OAuth popup windows or opened in
-the system browser; renderer Node.js integration is disabled and the renderer
-is sandboxed.
+Navigation outside the app opens in the system browser, and the renderer
+cannot open child windows; renderer Node.js integration is disabled and the
+renderer is sandboxed.
 
 ## Prototype boundaries
 
-This scaffold does not yet provide auto-update, OS deep links, macOS or Linux installers, or
-end-to-end desktop tests. Some identity providers
-reject authentication inside embedded user agents, so a system-browser OAuth
-handoff may still be required before treating this as a general release.
+This scaffold does not yet provide auto-update, macOS or Linux installers, or
+end-to-end desktop tests. The `chatto://` scheme serves only the OAuth
+callback; the application does not open other deep links. The Linux
+directory bundle ships no desktop entry, so Linux cannot register the scheme
+until an installable package exists.

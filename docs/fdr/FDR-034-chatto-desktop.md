@@ -8,8 +8,8 @@
 Chatto Desktop packages the official multi-server Chatto frontend as an
 Electron application. It gives desktop users a consistent bundled Chromium
 runtime without creating a second frontend or changing how people register and
-use Chatto servers. The application remains experimental while distribution,
-system-browser authentication, and clean-machine media behavior are hardened.
+use Chatto servers. The application remains experimental while distribution
+and clean-machine media behavior are hardened.
 
 ## Behavior
 
@@ -22,9 +22,13 @@ system-browser authentication, and clean-machine media behavior are hardened.
 - On launch, restored authenticated servers reconcile in the background so the
   welcome screen can show their availability without selecting one. Desktop
   remains on the welcome screen until the person chooses a server.
-- Connecting a server starts Chatto's PKCE-protected OAuth flow in a separate
-  Electron window. The remote server continues to own the visible sign-in and
-  consent pages.
+- Connecting a server starts Chatto's PKCE-protected OAuth flow in the
+  person's default browser. The remote server continues to own the visible
+  sign-in and consent pages. The browser returns to the application through
+  the `chatto://desktop/servers/callback` URL. While the application waits, a
+  sheet on its window offers **Cancel**; the attempt also ends after five
+  minutes. The application accepts a callback only for a sign-in that waits
+  for it, and ignores unknown, expired, and repeated callbacks.
 - Voice calls, camera video, screen sharing, and media-device selection use
   Electron's bundled Chromium WebRTC implementation. Camera and microphone
   requests use operating-system permission prompts; screen sharing requires an
@@ -128,8 +132,9 @@ system-browser authentication, and clean-machine media behavior are hardened.
 - Servers recognize the built-in `chatto://desktop` OAuth client and its exact
   callback. Desktop API and realtime access use bearer credentials and require
   no origin configuration.
-- Identity providers that reject embedded user agents are not supported until
-  Chatto Desktop gains a system-browser authorization handoff.
+- Identity providers that reject embedded user agents, and providers that
+  use the browser's passkeys, work because sign-in runs in the default
+  browser.
 
 ## Design Decisions
 
@@ -180,16 +185,28 @@ remote server navigation. Chatto servers trust only its exact callback path.
 clients using this identity require the corresponding Chatto 0.5 server
 behavior.
 
-### 4. Keep the browser OAuth-window flow
+### 4. Sign in through the system browser
 
-**Decision:** Both browser and Electron deployments use the frontend's ordinary
-`window.open()` authorization flow and the same PKCE and callback handling.
-**Why:** Electron implements browser popup windows, so the desktop host no
-longer needs the privileged CEF bridge introduced by the Deno prototype.
-**Tradeoff:** Some providers still require a system-browser flow, and the host
-must tightly constrain popup and navigation behavior. The host opens a new
-window only on the frontend's `/servers/authorize` launch page and sends all
-other window requests to the system browser.
+**Decision:** Chatto Desktop runs the complete authorization in the person's
+default browser, as RFC 8252 recommends for native applications. The host
+exposes a narrow `authorization` bridge (ADR-072): the frontend builds the
+PKCE request with the `chatto://desktop` identity and callback, the host opens
+the URL externally and returns the callback URL that the operating system
+delivers, and the frontend validates the callback and exchanges the code. The
+PKCE verifier stays in the renderer. The host never opens a child window; it
+sends every window request to the system browser. Browser deployments keep
+the frontend's ordinary `window.open()` flow.
+**Why:** Electron's embedded renderer does not serve platform passkeys, so
+providers that sign in only with passkeys, such as Pocket ID, never complete
+in an Electron window. Electron's platform-passkey support requires Apple
+Associated Domains for each identity provider, which a multi-server client
+cannot satisfy. The system browser already holds the person's passkeys,
+sessions, and password manager.
+**Tradeoff:** The person leaves the application during sign-in and returns
+through a URL-scheme handoff whose focus behavior differs by platform. The
+host must bind every callback to a waiting attempt, because any application
+can send a `chatto://` URL. An unpackaged macOS build cannot register the
+scheme, so manual testing of the handoff needs a packaged build.
 
 ### 5. Synchronize Desktop and Chatto releases
 
@@ -303,8 +320,9 @@ The iOS shell shares the frontend but uses native system authentication. See
 
 ## Open Questions
 
-- How system-browser OAuth callbacks and normal external links should return to
-  or focus the application on every platform.
+- How the system browser should return focus to the application on every
+  platform, and which Linux desktop entry should register the `chatto://`
+  scheme for the plain directory bundle.
 - Which automatic-update strategy and macOS/Linux installers should follow the
   Windows installer and downloadable archives.
 - Whether Electron's shipped codec set covers every media artifact Chatto
