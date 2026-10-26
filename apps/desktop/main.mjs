@@ -67,9 +67,11 @@ const frontendRoot = app.isPackaged
   : path.resolve(desktopRoot, '../frontend/build');
 
 let mainWindow;
+let activeAuthorization;
 let activeGameCaptureSession;
 let activeGameCaptureSourceList;
 const gameCaptureSourceOffers = new MacOSGameCaptureSourceOffers();
+const authorizationChannel = 'chatto:authorization:authorize';
 const macOSCaptureProbeListFlag = '--chatto-macos-capture-probe-list';
 const macOSCapturePocFlag = '--chatto-macos-capture-poc';
 
@@ -142,6 +144,7 @@ async function start() {
     }
     return passwordLogin(request);
   });
+  configureAuthorizationIPC();
   mainWindow = createMainWindow();
   const background = configureBackgroundWindow({
     app,
@@ -193,6 +196,7 @@ async function start() {
     if (process.platform !== 'darwin') app.quit();
   });
   app.on('before-quit', () => {
+    activeAuthorization?.kill();
     cancelActiveGameCaptureSourceList();
     stopActiveGameCaptureSession();
   });
@@ -537,10 +541,60 @@ function mainWindowWebPreferences() {
   // Hidden windows still receive notifications and maintain authenticated connections.
   preferences.backgroundThrottling = false;
   preferences.preload = path.join(desktopRoot, 'preload.cjs');
-  preferences.additionalArguments = isGameCaptureAvailable()
-    ? ['--chatto-native-screen-share']
-    : [];
+  preferences.additionalArguments = [
+    ...(isGameCaptureAvailable() ? ['--chatto-native-screen-share'] : []),
+    ...(isNativeAuthorizationAvailable() ? ['--chatto-native-authorization'] : [])
+  ];
   return preferences;
+}
+
+/**
+ * Sign in through the macOS system browser (FDR-034). The renderer sends the
+ * authorization URL and receives the callback URL; the helper accepts only the
+ * built-in desktop client, and the renderer validates the callback and keeps
+ * the OAuth state and PKCE verifier.
+ */
+function configureAuthorizationIPC() {
+  if (!isNativeAuthorizationAvailable()) return;
+
+  ipcMain.handle(authorizationChannel, (event, url) => {
+    if (
+      !mainWindow ||
+      event.sender !== mainWindow.webContents ||
+      event.senderFrame !== mainWindow.webContents.mainFrame ||
+      !hasAppOrigin(event.senderFrame.url)
+    ) {
+      throw new Error('Native sign-in is available only to the Chatto renderer.');
+    }
+    if (activeAuthorization) throw new Error('A sign-in attempt is already active.');
+    return runMacOSAuthorizationHelper(String(url));
+  });
+}
+
+function runMacOSAuthorizationHelper(url) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(macOSCaptureHelperExecutable(), ['authorize'], {
+      stdio: ['pipe', 'pipe', 'ignore']
+    });
+    activeAuthorization = child;
+    let output = '';
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => {
+      output += chunk;
+      if (output.length > 8 * 1024) child.kill();
+    });
+    child.stdin.once('error', () => child.kill());
+    child.once('error', (error) => {
+      activeAuthorization = undefined;
+      reject(error);
+    });
+    child.once('exit', (code) => {
+      activeAuthorization = undefined;
+      if (code === 0) resolve(output.trim());
+      else reject(new Error('Sign-in was cancelled or could not be completed.'));
+    });
+    child.stdin.end(`${url}\n`);
+  });
 }
 
 function configureGameCaptureIPC() {
@@ -777,6 +831,12 @@ function isGameCaptureAvailable() {
     app.isPackaged &&
     supportsMacOSGameCapture(process.getSystemVersion()) &&
     existsSync(macOSCaptureHelperExecutable())
+  );
+}
+
+function isNativeAuthorizationAvailable() {
+  return (
+    process.platform === 'darwin' && app.isPackaged && existsSync(macOSCaptureHelperExecutable())
   );
 }
 

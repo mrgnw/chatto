@@ -4,6 +4,9 @@ import { oauthPopupResponseFromURL, type OAuthPopupResponse } from '$lib/oauth/p
 /** The official mobile client has one exact OAuth identity and callback. */
 export const MOBILE_CLIENT_ID = 'eu.chattocorp.chatto.mobile';
 export const MOBILE_CALLBACK = 'eu.chattocorp.chatto.mobile:/oauth/callback';
+/** Chatto Desktop keeps its built-in client and callback for the system-browser flow (FDR-034). */
+export const DESKTOP_CLIENT_ID = 'chatto://desktop';
+export const DESKTOP_CALLBACK = 'chatto://desktop/servers/callback?mode=popup';
 
 /** A host that signs in through a system authentication session instead of a popup. */
 export type NativeAuthorization = {
@@ -24,6 +27,10 @@ export function nativeAuthorization(): NativeAuthorization | null {
       const result = await mobilePlugin.authorize({ url });
       return result?.url;
     });
+  }
+  const desktop = typeof window === 'undefined' ? undefined : window.chattoDesktop?.authorization;
+  if (typeof desktop?.authorize === 'function') {
+    return host(DESKTOP_CLIENT_ID, DESKTOP_CALLBACK, (url) => desktop.authorize(url));
   }
   return null;
 }
