@@ -23,11 +23,20 @@ vi.mock('$lib/serverCatalogue', () => ({
     registered.servers.find((server) => new URL(server.url).origin === new URL(url).origin)
 }));
 
-vi.mock('$lib/desktop/nativeAuthorization', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('$lib/desktop/nativeAuthorization')>()),
-  hasNativeAuthorization: () => native.available,
-  authorizeNatively: native.authorize
-}));
+vi.mock('$lib/desktop/nativeAuthorization', async (importOriginal) => {
+  const original = await importOriginal<typeof import('$lib/desktop/nativeAuthorization')>();
+  return {
+    ...original,
+    nativeAuthorizer: () =>
+      native.available
+        ? {
+            clientId: original.MOBILE_CLIENT_ID,
+            callback: original.MOBILE_CALLBACK,
+            authorize: native.authorize
+          }
+        : null
+  };
+});
 
 const {
   clearOriginAuthenticationMock,

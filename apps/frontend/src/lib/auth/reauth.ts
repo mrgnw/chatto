@@ -28,17 +28,11 @@ import { LOOPBACK_OAUTH_CLIENT_ID } from '$lib/auth/loopbackClient';
 import { resumePushRegistrationAfterAuthentication } from '$lib/notifications/pushRegistrationCoordinator';
 import { saveReturnUrl } from './returnNavigation';
 import { oauthBearerSession, persistedBearerSession } from '@chatto/client/auth/bearerSession';
-import {
-  authorizeNatively,
-  hasNativeAuthorization,
-  MOBILE_CALLBACK,
-  MOBILE_CLIENT_ID
-} from '$lib/desktop/nativeAuthorization';
+import { DESKTOP_CLIENT_ID, nativeAuthorizer } from '$lib/desktop/nativeAuthorization';
 import { m } from '$lib/i18n/messages';
 
 const POPUP_POLL_INTERVAL_MS = 250;
 const POPUP_TIMEOUT_MS = 5 * 60 * 1000;
-const DESKTOP_CLIENT_ID = 'chatto://desktop';
 const FRONTEND_CIMD_PATH = '/oauth/frontend-client-metadata.json';
 
 class OAuthPopupError extends Error {}
@@ -63,19 +57,20 @@ async function runServerOAuthFlow(
 ): Promise<void> {
   const verifier = generateCodeVerifier();
   const state = generateState();
-  if (hasNativeAuthorization()) {
+  const native = nativeAuthorizer();
+  if (native) {
     const info = await serverInfo;
     if (!info.authorizeUrl) throw new Error('This server does not support OAuth sign-in.');
     const challenge = await generateCodeChallenge(verifier);
     const params = new URLSearchParams({
       response_type: 'code',
-      client_id: MOBILE_CLIENT_ID,
-      redirect_uri: MOBILE_CALLBACK,
+      client_id: native.clientId,
+      redirect_uri: native.callback,
       code_challenge: challenge,
       code_challenge_method: 'S256',
       state
     });
-    const response = await authorizeNatively(`${serverUrl}${info.authorizeUrl}?${params}`, state);
+    const response = await native.authorize(`${serverUrl}${info.authorizeUrl}?${params}`, state);
     if (response.error || !response.code) {
       throw new OAuthPopupError(
         response.errorDescription || response.error || 'Missing authorization code.'
@@ -86,13 +81,13 @@ async function runServerOAuthFlow(
     const serverId = await completeServerOAuthFlow(
       {
         verifier,
-        clientId: MOBILE_CLIENT_ID,
+        clientId: native.clientId,
         remoteUrl: serverUrl,
         serverName: info.name,
         serverIconUrl: info.iconUrl ?? null
       },
       response.code,
-      MOBILE_CALLBACK
+      native.callback
     );
     await openSignedInServer(serverId);
     return;

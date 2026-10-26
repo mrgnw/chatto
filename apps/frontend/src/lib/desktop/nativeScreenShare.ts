@@ -39,8 +39,14 @@ export type NativeScreenSharePublisherRequest = {
   e2eeKey: string;
 };
 
+/** Sign in through the system browser; resolves with the `chatto://` callback URL. */
+export type DesktopAuthorizationBridge = {
+  authorize(request: { url: string; state: string }): Promise<{ url: string }>;
+};
+
 type ChattoDesktopBridge = {
-  screenShare: {
+  authorization?: DesktopAuthorizationBridge;
+  screenShare?: {
     listSources(): Promise<NativeScreenShareSourceResponse>;
     cancelSourceList?(): void;
     startPublisher(request: NativeScreenSharePublisherRequest): string;
