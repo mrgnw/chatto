@@ -76,6 +76,21 @@ export class AdminMember extends Message<AdminMember> {
    */
   primaryVerifiedEmail?: string;
 
+  /**
+   * Deactivated accounts retain their data but cannot use the server.
+   *
+   * @generated from field: bool deactivated = 14;
+   */
+  deactivated = false;
+
+  /**
+   * Whether the caller may deactivate or reactivate this account.
+   * Absent on servers that do not support account deactivation.
+   *
+   * @generated from field: optional bool viewer_can_change_deactivation = 15;
+   */
+  viewerCanChangeDeactivation?: boolean;
+
   constructor(data?: PartialMessage<AdminMember>) {
     super();
     proto3.util.initPartial(data, this);
@@ -92,6 +107,8 @@ export class AdminMember extends Message<AdminMember> {
     { no: 11, name: "last_login_change", kind: "message", T: Timestamp },
     { no: 12, name: "user", kind: "message", T: User },
     { no: 13, name: "primary_verified_email", kind: "scalar", T: 9 /* ScalarType.STRING */, opt: true },
+    { no: 14, name: "deactivated", kind: "scalar", T: 8 /* ScalarType.BOOL */ },
+    { no: 15, name: "viewer_can_change_deactivation", kind: "scalar", T: 8 /* ScalarType.BOOL */, opt: true },
   ]);
 
   static fromBinary(bytes: Uint8Array, options?: Partial<BinaryReadOptions>): AdminMember {
@@ -465,6 +482,159 @@ export class BatchGetMembersResponse extends Message<BatchGetMembersResponse> {
 
   static equals(a: BatchGetMembersResponse | PlainMessage<BatchGetMembersResponse> | undefined, b: BatchGetMembersResponse | PlainMessage<BatchGetMembersResponse> | undefined): boolean {
     return proto3.util.equals(BatchGetMembersResponse, a, b);
+  }
+}
+
+/**
+ * Explicit role assignments and current assignment limits for one human user.
+ * This resource contains no account details. The implicit everyone role is
+ * omitted from all lists. List order is not significant. Limits are advisory:
+ * commands check current authority again. Read this resource again after an
+ * assignment, revocation, or permission change.
+ *
+ * @generated from message chatto.admin.v1.UserRoleAssignments
+ */
+export class UserRoleAssignments extends Message<UserRoleAssignments> {
+  /**
+   * Target stable user ID.
+   *
+   * @generated from field: string user_id = 1;
+   */
+  userId = "";
+
+  /**
+   * Roles explicitly assigned to the target.
+   *
+   * @generated from field: repeated string role_names = 2;
+   */
+  roleNames: string[] = [];
+
+  /**
+   * Roles within the caller's current grant authority.
+   *
+   * @generated from field: repeated string assignable_role_names = 3;
+   */
+  assignableRoleNames: string[] = [];
+
+  /**
+   * Roles within the caller's current revoke authority for this target,
+   * including self-protection and configured-owner restrictions. A listed role
+   * need not currently be assigned.
+   *
+   * @generated from field: repeated string revocable_role_names = 4;
+   */
+  revocableRoleNames: string[] = [];
+
+  constructor(data?: PartialMessage<UserRoleAssignments>) {
+    super();
+    proto3.util.initPartial(data, this);
+  }
+
+  static readonly runtime: typeof proto3 = proto3;
+  static readonly typeName = "chatto.admin.v1.UserRoleAssignments";
+  static readonly fields: FieldList = proto3.util.newFieldList(() => [
+    { no: 1, name: "user_id", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 2, name: "role_names", kind: "scalar", T: 9 /* ScalarType.STRING */, repeated: true },
+    { no: 3, name: "assignable_role_names", kind: "scalar", T: 9 /* ScalarType.STRING */, repeated: true },
+    { no: 4, name: "revocable_role_names", kind: "scalar", T: 9 /* ScalarType.STRING */, repeated: true },
+  ]);
+
+  static fromBinary(bytes: Uint8Array, options?: Partial<BinaryReadOptions>): UserRoleAssignments {
+    return new UserRoleAssignments().fromBinary(bytes, options);
+  }
+
+  static fromJson(jsonValue: JsonValue, options?: Partial<JsonReadOptions>): UserRoleAssignments {
+    return new UserRoleAssignments().fromJson(jsonValue, options);
+  }
+
+  static fromJsonString(jsonString: string, options?: Partial<JsonReadOptions>): UserRoleAssignments {
+    return new UserRoleAssignments().fromJsonString(jsonString, options);
+  }
+
+  static equals(a: UserRoleAssignments | PlainMessage<UserRoleAssignments> | undefined, b: UserRoleAssignments | PlainMessage<UserRoleAssignments> | undefined): boolean {
+    return proto3.util.equals(UserRoleAssignments, a, b);
+  }
+}
+
+/**
+ * Request role assignments without administrative account details.
+ *
+ * @generated from message chatto.admin.v1.GetUserRoleAssignmentsRequest
+ */
+export class GetUserRoleAssignmentsRequest extends Message<GetUserRoleAssignmentsRequest> {
+  /**
+   * Required stable ID of a human user.
+   *
+   * @generated from field: string user_id = 1;
+   */
+  userId = "";
+
+  constructor(data?: PartialMessage<GetUserRoleAssignmentsRequest>) {
+    super();
+    proto3.util.initPartial(data, this);
+  }
+
+  static readonly runtime: typeof proto3 = proto3;
+  static readonly typeName = "chatto.admin.v1.GetUserRoleAssignmentsRequest";
+  static readonly fields: FieldList = proto3.util.newFieldList(() => [
+    { no: 1, name: "user_id", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+  ]);
+
+  static fromBinary(bytes: Uint8Array, options?: Partial<BinaryReadOptions>): GetUserRoleAssignmentsRequest {
+    return new GetUserRoleAssignmentsRequest().fromBinary(bytes, options);
+  }
+
+  static fromJson(jsonValue: JsonValue, options?: Partial<JsonReadOptions>): GetUserRoleAssignmentsRequest {
+    return new GetUserRoleAssignmentsRequest().fromJson(jsonValue, options);
+  }
+
+  static fromJsonString(jsonString: string, options?: Partial<JsonReadOptions>): GetUserRoleAssignmentsRequest {
+    return new GetUserRoleAssignmentsRequest().fromJsonString(jsonString, options);
+  }
+
+  static equals(a: GetUserRoleAssignmentsRequest | PlainMessage<GetUserRoleAssignmentsRequest> | undefined, b: GetUserRoleAssignmentsRequest | PlainMessage<GetUserRoleAssignmentsRequest> | undefined): boolean {
+    return proto3.util.equals(GetUserRoleAssignmentsRequest, a, b);
+  }
+}
+
+/**
+ * Current role assignments and limits for the requested user.
+ *
+ * @generated from message chatto.admin.v1.GetUserRoleAssignmentsResponse
+ */
+export class GetUserRoleAssignmentsResponse extends Message<GetUserRoleAssignmentsResponse> {
+  /**
+   * Requested assignment state. Resolve role metadata with RoleService.
+   *
+   * @generated from field: chatto.admin.v1.UserRoleAssignments assignments = 1;
+   */
+  assignments?: UserRoleAssignments;
+
+  constructor(data?: PartialMessage<GetUserRoleAssignmentsResponse>) {
+    super();
+    proto3.util.initPartial(data, this);
+  }
+
+  static readonly runtime: typeof proto3 = proto3;
+  static readonly typeName = "chatto.admin.v1.GetUserRoleAssignmentsResponse";
+  static readonly fields: FieldList = proto3.util.newFieldList(() => [
+    { no: 1, name: "assignments", kind: "message", T: UserRoleAssignments },
+  ]);
+
+  static fromBinary(bytes: Uint8Array, options?: Partial<BinaryReadOptions>): GetUserRoleAssignmentsResponse {
+    return new GetUserRoleAssignmentsResponse().fromBinary(bytes, options);
+  }
+
+  static fromJson(jsonValue: JsonValue, options?: Partial<JsonReadOptions>): GetUserRoleAssignmentsResponse {
+    return new GetUserRoleAssignmentsResponse().fromJson(jsonValue, options);
+  }
+
+  static fromJsonString(jsonString: string, options?: Partial<JsonReadOptions>): GetUserRoleAssignmentsResponse {
+    return new GetUserRoleAssignmentsResponse().fromJsonString(jsonString, options);
+  }
+
+  static equals(a: GetUserRoleAssignmentsResponse | PlainMessage<GetUserRoleAssignmentsResponse> | undefined, b: GetUserRoleAssignmentsResponse | PlainMessage<GetUserRoleAssignmentsResponse> | undefined): boolean {
+    return proto3.util.equals(GetUserRoleAssignmentsResponse, a, b);
   }
 }
 
@@ -884,5 +1054,89 @@ export class DeleteUserResponse extends Message<DeleteUserResponse> {
 
   static equals(a: DeleteUserResponse | PlainMessage<DeleteUserResponse> | undefined, b: DeleteUserResponse | PlainMessage<DeleteUserResponse> | undefined): boolean {
     return proto3.util.equals(DeleteUserResponse, a, b);
+  }
+}
+
+/**
+ * Set account access without deleting user data.
+ *
+ * @generated from message chatto.admin.v1.SetUserDeactivatedRequest
+ */
+export class SetUserDeactivatedRequest extends Message<SetUserDeactivatedRequest> {
+  /**
+   * @generated from field: string user_id = 1;
+   */
+  userId = "";
+
+  /**
+   * @generated from field: bool deactivated = 2;
+   */
+  deactivated = false;
+
+  constructor(data?: PartialMessage<SetUserDeactivatedRequest>) {
+    super();
+    proto3.util.initPartial(data, this);
+  }
+
+  static readonly runtime: typeof proto3 = proto3;
+  static readonly typeName = "chatto.admin.v1.SetUserDeactivatedRequest";
+  static readonly fields: FieldList = proto3.util.newFieldList(() => [
+    { no: 1, name: "user_id", kind: "scalar", T: 9 /* ScalarType.STRING */ },
+    { no: 2, name: "deactivated", kind: "scalar", T: 8 /* ScalarType.BOOL */ },
+  ]);
+
+  static fromBinary(bytes: Uint8Array, options?: Partial<BinaryReadOptions>): SetUserDeactivatedRequest {
+    return new SetUserDeactivatedRequest().fromBinary(bytes, options);
+  }
+
+  static fromJson(jsonValue: JsonValue, options?: Partial<JsonReadOptions>): SetUserDeactivatedRequest {
+    return new SetUserDeactivatedRequest().fromJson(jsonValue, options);
+  }
+
+  static fromJsonString(jsonString: string, options?: Partial<JsonReadOptions>): SetUserDeactivatedRequest {
+    return new SetUserDeactivatedRequest().fromJsonString(jsonString, options);
+  }
+
+  static equals(a: SetUserDeactivatedRequest | PlainMessage<SetUserDeactivatedRequest> | undefined, b: SetUserDeactivatedRequest | PlainMessage<SetUserDeactivatedRequest> | undefined): boolean {
+    return proto3.util.equals(SetUserDeactivatedRequest, a, b);
+  }
+}
+
+/**
+ * @generated from message chatto.admin.v1.SetUserDeactivatedResponse
+ */
+export class SetUserDeactivatedResponse extends Message<SetUserDeactivatedResponse> {
+  /**
+   * Updated administrative member record.
+   *
+   * @generated from field: chatto.admin.v1.AdminMember member = 1;
+   */
+  member?: AdminMember;
+
+  constructor(data?: PartialMessage<SetUserDeactivatedResponse>) {
+    super();
+    proto3.util.initPartial(data, this);
+  }
+
+  static readonly runtime: typeof proto3 = proto3;
+  static readonly typeName = "chatto.admin.v1.SetUserDeactivatedResponse";
+  static readonly fields: FieldList = proto3.util.newFieldList(() => [
+    { no: 1, name: "member", kind: "message", T: AdminMember },
+  ]);
+
+  static fromBinary(bytes: Uint8Array, options?: Partial<BinaryReadOptions>): SetUserDeactivatedResponse {
+    return new SetUserDeactivatedResponse().fromBinary(bytes, options);
+  }
+
+  static fromJson(jsonValue: JsonValue, options?: Partial<JsonReadOptions>): SetUserDeactivatedResponse {
+    return new SetUserDeactivatedResponse().fromJson(jsonValue, options);
+  }
+
+  static fromJsonString(jsonString: string, options?: Partial<JsonReadOptions>): SetUserDeactivatedResponse {
+    return new SetUserDeactivatedResponse().fromJsonString(jsonString, options);
+  }
+
+  static equals(a: SetUserDeactivatedResponse | PlainMessage<SetUserDeactivatedResponse> | undefined, b: SetUserDeactivatedResponse | PlainMessage<SetUserDeactivatedResponse> | undefined): boolean {
+    return proto3.util.equals(SetUserDeactivatedResponse, a, b);
   }
 }

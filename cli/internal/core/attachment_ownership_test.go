@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chattocorp/chatto/cli/internal/readmodel"
+
 	"github.com/chattocorp/chatto/cli/internal/config"
 	"github.com/chattocorp/chatto/cli/internal/evtstream"
 	evtv1 "github.com/chattocorp/chatto/cli/internal/pb/chatto/core/evt/v1"
@@ -19,8 +21,6 @@ import (
 )
 
 func TestMessagePostRejectsAttachmentUploadedByAnotherRoomMember(t *testing.T) {
-	t.Parallel()
-
 	chatto, _ := setupTestCore(t)
 	ctx := testContext(t)
 	victim, attacker, room := setupAttachmentOwnershipUsers(t, chatto, ctx, "cross-user")
@@ -41,8 +41,6 @@ func TestMessagePostRejectsAttachmentUploadedByAnotherRoomMember(t *testing.T) {
 }
 
 func TestMessagePostRejectsAssetAlreadyAttachedBySameUser(t *testing.T) {
-	t.Parallel()
-
 	chatto, _ := setupTestCore(t)
 	ctx := testContext(t)
 	user, _, room := setupAttachmentOwnershipUsers(t, chatto, ctx, "same-user")
@@ -63,8 +61,6 @@ func TestMessagePostRejectsAssetAlreadyAttachedBySameUser(t *testing.T) {
 }
 
 func TestDeletingLegacyAttachmentAliasDoesNotDeleteCanonicalAsset(t *testing.T) {
-	t.Parallel()
-
 	chatto, _ := setupTestCore(t)
 	ctx := testContext(t)
 	victim, attacker, room := setupAttachmentOwnershipUsers(t, chatto, ctx, "legacy-partial-delete")
@@ -82,8 +78,6 @@ func TestDeletingLegacyAttachmentAliasDoesNotDeleteCanonicalAsset(t *testing.T) 
 }
 
 func TestDeletingLegacyMessageAliasDoesNotDeleteCanonicalAsset(t *testing.T) {
-	t.Parallel()
-
 	chatto, _ := setupTestCore(t)
 	ctx := testContext(t)
 	victim, attacker, room := setupAttachmentOwnershipUsers(t, chatto, ctx, "legacy-message-delete")
@@ -101,8 +95,6 @@ func TestDeletingLegacyMessageAliasDoesNotDeleteCanonicalAsset(t *testing.T) {
 }
 
 func TestConcurrentMessagePostsAttachAssetOnceAcrossReplicas(t *testing.T) {
-	t.Parallel()
-
 	ns, _ := testutil.StartNATS(t)
 	chatto := startReplica(t, ns, testCoreConfig())
 	ctx := testContext(t)
@@ -168,7 +160,7 @@ func TestConcurrentMessagePostsAttachAssetOnceAcrossReplicas(t *testing.T) {
 	require.Equal(t, 1, rejected)
 }
 
-func setupAttachmentOwnershipUsers(t *testing.T, chatto *ChattoCore, ctx context.Context, suffix string) (*evtv1.User, *evtv1.User, *evtv1.Room) {
+func setupAttachmentOwnershipUsers(t *testing.T, chatto *ChattoCore, ctx context.Context, suffix string) (*readmodel.User, *readmodel.User, *readmodel.Room) {
 	t.Helper()
 	victim, err := chatto.CreateUser(ctx, SystemActorID, "av-"+suffix, "Asset Victim", "password123")
 	require.NoError(t, err)

@@ -6,16 +6,14 @@ import (
 	"testing"
 	"time"
 
-	evtv1 "github.com/chattocorp/chatto/cli/internal/pb/chatto/core/evt/v1"
+	"github.com/chattocorp/chatto/cli/internal/readmodel"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestServerMemberUserPage(t *testing.T) {
-	t.Parallel()
-
 	oldest := timestamppb.New(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	newest := timestamppb.New(time.Date(2026, 1, 2, 0, 0, 0, 0, time.UTC))
-	users := []*evtv1.User{
+	users := []*readmodel.User{
 		{Id: "nil-z", Login: "Zulu", DisplayName: "Legacy Zulu"},
 		{Id: "new", Login: "bravo", DisplayName: "Second Match", CreatedAt: newest},
 		{Id: "nil-a", Login: "alpha", DisplayName: "Legacy Alpha"},
@@ -86,10 +84,8 @@ func TestServerMemberUserPage(t *testing.T) {
 }
 
 func TestServerMemberUserPageTieOrder(t *testing.T) {
-	t.Parallel()
-
 	created := timestamppb.New(time.Unix(1, 0))
-	users := []*evtv1.User{
+	users := []*readmodel.User{
 		{Id: "b", CreatedAt: created},
 		{Id: "d", Login: "legacy"},
 		{Id: "a", CreatedAt: created},
@@ -106,8 +102,6 @@ func TestServerMemberUserPageTieOrder(t *testing.T) {
 }
 
 func TestSeedDefaultRooms(t *testing.T) {
-	t.Parallel()
-
 	t.Run("creates announcements and general in the seed Lobby group", func(t *testing.T) {
 		c, _ := setupTestCore(t)
 		ctx := testContext(t)

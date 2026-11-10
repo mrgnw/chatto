@@ -1,16 +1,25 @@
 /** Exercise inbox, shared client timeline, Pi input, and reply routing together. */
 import { afterEach, beforeEach, expect, test, vi } from 'vitest';
-import type { AddressedMessage, Destination, Server } from '@chatto/client';
+import type { Destination, Server } from '@chatto/client';
+import type { IncomingMessage } from './messages.ts';
 import { Inbox } from './inbox.ts';
+import type { ParticipantSource } from './context.ts';
 import { createTurnHandler } from './turn.ts';
 import { parseSettings } from './settings.ts';
-import { contextFixture, row } from './context.fixture.ts';
+import { contextFixture, page, row } from './context.fixture.ts';
 import { hasTranscript } from './messages.ts';
 import { createTaskContext } from 'runling';
+import { createTitleWriter } from './title.ts';
+import { withTyping } from '@chatto/client/messaging/typing';
+import type { ConversationResponse } from './response.ts';
+
+const naming = vi.hoisted(() => vi.fn<ReturnType<typeof createTitleWriter>>());
+vi.mock('./title.ts', () => ({ createTitleWriter: () => naming }));
 
 vi.mock('./messages.ts', () => ({ hasTranscript: vi.fn() }));
 
 beforeEach(() => {
+  naming.mockReset().mockResolvedValue(undefined);
   vi.mocked(hasTranscript).mockReset().mockResolvedValue(false);
   vi.useFakeTimers();
   vi.spyOn(console, 'info').mockImplementation(() => {});
@@ -23,7 +32,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function setup(beforeEffects: (messages: readonly AddressedMessage[]) => void = () => {}) {
+function setup(beforeEffects: (messages: readonly IncomingMessage[]) => void = () => {}) {
   const settings = parseSettings(
     '[chatto]\nurl="https://chat.example.com"\napi_key="test"\n[agent]\nmodel="test/model"',
     'botto.toml',
@@ -33,13 +42,20 @@ function setup(beforeEffects: (messages: readonly AddressedMessage[]) => void = 
   fixtures.push(fixture.rooms);
   const server = {
     ...fixture.server,
+    service: vi.fn<ParticipantSource['service']>().mockReturnValue({
+      batchGetUsers: vi.fn().mockResolvedValue({ users: [] })
+    }),
     getMessage: vi.fn<Server['getMessage']>().mockResolvedValue(undefined),
+    readAttachment: vi.fn<Server['readAttachment']>(),
     addReaction: vi.fn<Server['addReaction']>().mockResolvedValue(undefined),
     postMessage: vi.fn<Server['postMessage']>().mockResolvedValue({ ids: ['reply'] }),
     withTyping: async <T>(_destination: Destination, work: () => Promise<T>) => work()
   };
+  vi.spyOn(server, 'withTyping');
   const agent = {
-    reply: vi.fn<Parameters<typeof createTurnHandler>[3]['reply']>().mockResolvedValue('One answer')
+    reply: vi
+      .fn<Parameters<typeof createTurnHandler>[3]['reply']>()
+      .mockResolvedValue({ action: 'reply', text: 'One answer' })
   };
   const controller = new AbortController();
   const handle = createTurnHandler(
@@ -51,8 +67,8 @@ function setup(beforeEffects: (messages: readonly AddressedMessage[]) => void = 
     beforeEffects
   );
   const ctx = createTaskContext();
-  const turn = (messages: readonly AddressedMessage[]) => handle(ctx, messages);
-  const one: AddressedMessage = {
+  const turn = (messages: readonly IncomingMessage[]) => handle(ctx, messages);
+  const one: IncomingMessage = {
     id: 'one',
     roomId: 'room',
     threadRootId: 'root',
@@ -60,9 +76,277 @@ function setup(beforeEffects: (messages: readonly AddressedMessage[]) => void = 
     body: 'First',
     reasons: ['mention']
   };
-  const two: AddressedMessage = { ...one, id: 'two', authorId: 'another', body: 'Clarification' };
+  const two: IncomingMessage = { ...one, id: 'two', authorId: 'another', body: 'Clarification' };
   return { ...fixture, settings, server, agent, controller, turn, one, two };
 }
+
+test.each([true, false])(
+  'finishes pending typing before the final post, independently of naming (addressed: %s)',
+  async (addressed) => {
+    const { turn, one, server, agent } = setup();
+    const finishModel = Promise.withResolvers<ConversationResponse>();
+    const finishNaming = Promise.withResolvers<void>();
+    const refresh = Promise.withResolvers<void>();
+    const events: string[] = [];
+    const update = vi.fn(async () => {
+      await refresh.promise;
+      events.push('typing');
+    });
+    vi.mocked(server.withTyping).mockImplementation((_destination, work) =>
+      withTyping(new AbortController().signal, update, work)
+    );
+    naming.mockReturnValueOnce(finishNaming.promise);
+    agent.reply.mockReturnValueOnce(finishModel.promise);
+    server.postMessage.mockImplementationOnce(async () => {
+      events.push('answer');
+      return { ids: ['reply'] };
+    });
+    const pending = turn([{ ...one, reasons: addressed ? ['mention'] : [] }]);
+    await vi.waitFor(() => expect(agent.reply).toHaveBeenCalledOnce());
+    finishModel.resolve({ action: 'reply', text: 'Done' });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(server.postMessage).not.toHaveBeenCalled();
+    refresh.resolve();
+    await vi.waitFor(() => expect(server.postMessage).toHaveBeenCalledOnce());
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(events).toEqual(['typing', 'answer']);
+    expect(update).toHaveBeenCalledOnce();
+    finishNaming.resolve();
+    await pending;
+  }
+);
+
+test('posts the reply while naming is pending and joins naming before the turn ends', async () => {
+  const { turn, one, history, server } = setup();
+  history.mockResolvedValue(page([row('root', 'Root'), row('one', 'First')]));
+  let finish!: () => void;
+  naming.mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      })
+  );
+  let ended = false;
+  const pending = turn([one]).then(() => {
+    ended = true;
+  });
+  await vi.waitFor(() => expect(server.postMessage).toHaveBeenCalledOnce());
+  expect(ended).toBe(false);
+  expect(naming.mock.calls[0]![1]).toBe('First');
+  finish();
+  await pending;
+  expect(ended).toBe(true);
+});
+
+test.each(['silent', 'react', 'reply'] as const)(
+  'the conversation agent selects %s for passive activity',
+  async (action) => {
+    const beforeEffects = vi.fn();
+    const { turn, one, server, agent } = setup(beforeEffects);
+    agent.reply.mockResolvedValueOnce(
+      action === 'reply'
+        ? { action, text: 'An answer' }
+        : action === 'react'
+          ? { action, emoji: 'heart' }
+          : { action }
+    );
+    await turn([{ ...one, reasons: [] }]);
+    expect(agent.reply).toHaveBeenCalledOnce();
+    expect(beforeEffects).toHaveBeenCalledOnce();
+    expect(server.withTyping).toHaveBeenCalledOnce();
+    expect(server.postMessage).toHaveBeenCalledTimes(action === 'reply' ? 1 : 0);
+    expect(server.addReaction).toHaveBeenCalledTimes(action === 'react' ? 1 : 0);
+    if (action === 'react')
+      expect(server.addReaction).toHaveBeenCalledWith(
+        { roomId: 'room', messageId: 'one' },
+        'heart',
+        expect.anything()
+      );
+  }
+);
+
+test('incoming reactions reach the conversation without offering a reaction to its own message', async () => {
+  const { turn, one, server, agent, history } = setup();
+  history.mockResolvedValue(page([row('root', 'Root'), row('answer', 'Bot answer')]));
+  agent.reply.mockResolvedValueOnce({ action: 'silent' });
+  const reaction = {
+    ...one,
+    id: 'reaction-event',
+    body: '',
+    reasons: [],
+    reaction: { messageId: 'answer', emoji: 'thinking_face' }
+  };
+  await turn([reaction]);
+  expect(agent.reply.mock.calls[0]![1].allowReaction).toBe(false);
+  expect(JSON.parse(agent.reply.mock.calls[0]![1].prompt).currentMessages).toEqual([
+    { author: 'human', reaction: reaction.reaction }
+  ]);
+  expect(
+    server.getMessage.mock.calls.some(([target]) => target.messageId === 'reaction-event')
+  ).toBe(false);
+  expect(server.addReaction).not.toHaveBeenCalled();
+  expect(server.postMessage).not.toHaveBeenCalled();
+});
+
+test.each(['direct_message', 'mention', 'reply'] as const)(
+  'addressed %s can end in explicit silence',
+  async (reason) => {
+    const { turn, one, server, agent } = setup();
+    vi.mocked(hasTranscript).mockResolvedValue(true);
+    agent.reply.mockResolvedValueOnce({ action: 'silent' });
+    await turn([{ ...one, reasons: [reason] }]);
+    expect(agent.reply).toHaveBeenCalledOnce();
+    expect(server.postMessage).not.toHaveBeenCalled();
+    expect(server.addReaction).not.toHaveBeenCalled();
+  }
+);
+
+test('reaction delivery stops typing first and never retries an uncertain write', async () => {
+  const { turn, one, server, agent } = setup();
+  let typing = false;
+  vi.mocked(server.withTyping).mockImplementation(async (_destination, work) => {
+    typing = true;
+    try {
+      return await work();
+    } finally {
+      typing = false;
+    }
+  });
+  agent.reply.mockResolvedValueOnce({ action: 'react', emoji: '+1' });
+  server.addReaction.mockImplementationOnce(async () => {
+    expect(typing).toBe(false);
+    throw new Error('Uncertain write');
+  });
+  await expect(turn([{ ...one, reasons: [] }])).rejects.toThrow('Uncertain write');
+  expect(server.addReaction).toHaveBeenCalledOnce();
+  expect(server.postMessage).not.toHaveBeenCalled();
+});
+
+test('cancellation after the model prevents a selected reaction', async () => {
+  const { turn, one, server, agent, controller } = setup();
+  agent.reply.mockImplementationOnce(async () => {
+    controller.abort();
+    return { action: 'react', emoji: 'heart' };
+  });
+  await expect(turn([{ ...one, reasons: [] }])).rejects.toThrow();
+  expect(server.addReaction).not.toHaveBeenCalled();
+});
+
+test('passive typing starts before a completed message and ends even when later work fails', async () => {
+  const { turn, one, server, agent } = setup();
+  const release = Promise.withResolvers<void>();
+  const acknowledged = Promise.withResolvers<void>();
+  let typingActive = false;
+  vi.mocked(server.withTyping).mockImplementation(async (_destination, work) => {
+    typingActive = true;
+    try {
+      return await work();
+    } finally {
+      typingActive = false;
+    }
+  });
+  agent.reply.mockImplementationOnce(async (_ctx, { postUpdate }) => {
+    expect(server.withTyping).toHaveBeenCalledOnce();
+    expect(typingActive).toBe(true);
+    expect(server.postMessage).not.toHaveBeenCalled();
+    await postUpdate!("I'll check the forecast.");
+    acknowledged.resolve();
+    await release.promise;
+    throw new Error('Model failed');
+  });
+  const pending = turn([{ ...one, reasons: [] }]);
+  const rejected = expect(pending).rejects.toThrow('Model failed');
+  await acknowledged.promise;
+  expect(typingActive).toBe(true);
+  release.resolve();
+  await rejected;
+  expect(typingActive).toBe(false);
+  expect(server.postMessage).toHaveBeenCalledOnce();
+});
+
+test('a mixed batch keeps addressing per message and acknowledges the addressed message', async () => {
+  const { turn, one, two, server, agent } = setup();
+  await turn([{ ...one, reasons: [] }, two]);
+  expect(
+    JSON.parse(agent.reply.mock.calls[0]![1].prompt).currentMessages.map(
+      (item: { reasons: string[] }) => item.reasons
+    )
+  ).toEqual([[], ['mention']]);
+  expect(server.withTyping).toHaveBeenCalledOnce();
+  expect(server.addReaction.mock.calls[0]![0].messageId).toBe('two');
+});
+
+test('joins naming even when posting the reply fails', async () => {
+  const { turn, one, history, server } = setup();
+  history.mockResolvedValue(page([row('root', 'Root'), row('one', 'First')]));
+  let finish!: () => void;
+  naming.mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      })
+  );
+  server.postMessage.mockRejectedValueOnce(new Error('Post failed'));
+  let ended = false;
+  const pending = turn([one]).catch((error: unknown) => {
+    ended = true;
+    return error;
+  });
+  try {
+    await vi.waitFor(() => expect(server.postMessage).toHaveBeenCalledOnce());
+    await vi.advanceTimersByTimeAsync(0);
+    expect(ended).toBe(false);
+  } finally {
+    finish();
+  }
+  expect(await pending).toBeInstanceOf(Error);
+});
+
+test('passes image-only message pixels as request context, not persisted prompt text', async () => {
+  const { turn, one, history, server, agent } = setup();
+  const image = row('one', '');
+  if (image.event.kind !== 'messagePosted') throw new Error('Expected message');
+  image.event.attachments = [
+    { id: 'image', filename: 'image.png', contentType: 'image/png', width: 10, height: 10 }
+  ];
+  history.mockResolvedValue(page([row('root', 'Root'), image]));
+  server.readAttachment.mockResolvedValue({
+    filename: 'image.png',
+    contentType: 'image/png',
+    data: new Uint8Array([1, 2, 3])
+  });
+  await turn([{ ...one, body: '' }]);
+  const input = agent.reply.mock.calls[0]![1];
+  expect(server.readAttachment).not.toHaveBeenCalled();
+  expect((await input.loadImages!()).images).toEqual([
+    { messageId: 'one', attachmentId: 'image', mimeType: 'image/png', data: 'AQID' }
+  ]);
+  expect(input.prompt).not.toContain('AQID');
+  expect(server.postMessage).toHaveBeenCalledOnce();
+});
+
+test.each([false, true])(
+  'does not install an image loader for text or document-only context (document: %s)',
+  async (document) => {
+    const { turn, one, history, server, agent } = setup();
+    const message = row('one', 'Text request');
+    if (message.event.kind !== 'messagePosted') throw new Error('Expected message');
+    if (document)
+      message.event.attachments = [
+        {
+          id: 'document',
+          filename: 'notes.pdf',
+          contentType: 'application/pdf',
+          width: 0,
+          height: 0
+        }
+      ];
+    history.mockResolvedValue(page([row('root', 'Root'), message]));
+    await turn([one]);
+    expect(agent.reply.mock.calls[0]![1].loadImages).toBeUndefined();
+    expect(server.readAttachment).not.toHaveBeenCalled();
+  }
+);
 
 test('a failed durable start prevents reactions, model calls, and reply posts', async () => {
   const beforeEffects = vi.fn(() => {
@@ -132,6 +416,17 @@ test('later turns use the live timeline without another history request', async 
   controller.abort();
 });
 
+test('each turn receives a fresh UTC date and time, including across midnight', async () => {
+  const { turn, one, two, agent } = setup();
+  vi.setSystemTime(new Date('2026-10-28T23:59:00.000Z'));
+  await turn([one]);
+  vi.setSystemTime(new Date('2026-10-29T00:01:00.000Z'));
+  await turn([two]);
+  expect(
+    agent.reply.mock.calls.map(([, input]) => JSON.parse(input.prompt).currentDateTime)
+  ).toEqual(['2026-10-28T23:59:00.000Z', '2026-10-29T00:01:00.000Z']);
+});
+
 test('a debounced batch becomes one prompt and one reply in its original thread', async () => {
   const { settings, server, agent, controller, turn, one, two, history } = setup();
   const failed = vi.fn();
@@ -145,13 +440,11 @@ test('a debounced batch becomes one prompt and one reply in its original thread'
     expect.objectContaining({ signal: expect.any(AbortSignal) }),
     {
       identity: ['https://chat.example.com', 'bot', 'room', 'root'],
-      prompt: JSON.stringify({
-        currentMessages: [
-          { id: 'one', author: 'human', text: 'First' },
-          { id: 'two', author: 'another', text: 'Clarification' }
-        ]
-      }),
+      prompt: expect.any(String),
       signal: expect.any(AbortSignal),
+      postUpdate: expect.any(Function),
+      allowReaction: true,
+      loadImages: undefined,
       context: {
         messages: [
           { id: 'root', author: 'human', text: 'Root', fromViewer: false },
@@ -164,12 +457,22 @@ test('a debounced batch becomes one prompt and one reply in its original thread'
           { id: 'one', author: 'human', text: 'First', fromViewer: false },
           { id: 'two', author: 'another', text: 'Clarification', fromViewer: false }
         ],
-        olderContextOmitted: false
+        olderContextOmitted: false,
+        participants: [],
+        imageNotes: []
       },
       userIds: ['human', 'another'],
-      tools: [expect.any(Function)]
+      tools: [expect.any(Function)],
+      capabilities: ['images']
     }
   );
+  expect(JSON.parse(agent.reply.mock.calls[0]![1].prompt)).toEqual({
+    currentDateTime: expect.any(String),
+    currentMessages: [
+      { id: 'one', author: 'human', text: 'First', reasons: ['mention'] },
+      { id: 'two', author: 'another', text: 'Clarification', reasons: ['mention'] }
+    ]
+  });
   expect(history).toHaveBeenCalledOnce();
   expect(server.addReaction).toHaveBeenCalledExactlyOnceWith(
     { roomId: 'room', messageId: 'one' },
@@ -244,8 +547,128 @@ test('failed or cancelled model work never posts a reply', async () => {
   expect(server.postMessage).not.toHaveBeenCalled();
   agent.reply.mockImplementationOnce(async () => {
     controller.abort();
-    return 'Too late';
+    return { action: 'reply', text: 'Too late' };
   });
   await expect(turn([one])).rejects.toThrow();
   expect(server.postMessage).not.toHaveBeenCalled();
+});
+
+test('posts interim text before model completion, preserves order, and sends the final answer once', async () => {
+  const { server, agent, turn, one } = setup();
+  const firstPost = Promise.withResolvers<void>();
+  const releasePost = Promise.withResolvers<void>();
+  const finishModel = Promise.withResolvers<void>();
+  server.postMessage.mockImplementationOnce(async () => {
+    firstPost.resolve();
+    await releasePost.promise;
+    return { ids: ['interim'] };
+  });
+  agent.reply.mockImplementationOnce(async (_ctx, { postUpdate }) => {
+    await postUpdate!('Let me take a closer look.');
+    await finishModel.promise;
+    return { action: 'reply', text: 'Here is the answer.' };
+  });
+  const pending = turn([one]);
+  await firstPost.promise;
+  expect(server.postMessage).toHaveBeenCalledTimes(1);
+  releasePost.resolve();
+  finishModel.resolve();
+  await pending;
+  expect(server.postMessage.mock.calls.map((call) => call[1])).toEqual([
+    'Let me take a closer look.',
+    'Here is the answer.'
+  ]);
+});
+
+test('a failed interim post cancels model work and is never retried', async () => {
+  const { server, agent, turn, one } = setup();
+  server.postMessage.mockRejectedValueOnce(new Error('Uncertain write'));
+  agent.reply.mockImplementationOnce(async (_ctx, { postUpdate, signal }) => {
+    await expect(postUpdate!('Looking now.')).rejects.toThrow('Uncertain write');
+    signal.throwIfAborted();
+    return { action: 'reply', text: 'Unreachable' };
+  });
+  await expect(turn([one])).rejects.toThrow();
+  expect(server.postMessage).toHaveBeenCalledTimes(1);
+});
+
+test('an already delivered interim message survives a later model failure without another post', async () => {
+  const { server, agent, turn, one } = setup();
+  const posted = Promise.withResolvers<void>();
+  server.postMessage.mockImplementationOnce(async () => {
+    posted.resolve();
+    return { ids: ['interim'] };
+  });
+  agent.reply.mockImplementationOnce(async (_ctx, { postUpdate }) => {
+    await postUpdate!('Looking now.');
+    await posted.promise;
+    throw new Error('Model failed');
+  });
+  await expect(turn([one])).rejects.toThrow('Model failed');
+  expect(server.postMessage).toHaveBeenCalledTimes(1);
+});
+
+test('supplies current directory names by author ID without changing message text', async () => {
+  const { server, agent, turn, one, two } = setup();
+  const batchGetUsers = vi.fn().mockResolvedValue({
+    users: [
+      { user: { id: 'another', login: 'river', displayName: 'River', deleted: false } },
+      { user: { id: 'human', login: 'cedar', displayName: 'Cedar', deleted: false } },
+      { user: { id: 'bot', login: 'helper', displayName: 'Helper', deleted: false } },
+      { user: { id: 'outsider', login: 'unrequested', displayName: 'Other', deleted: false } }
+    ]
+  });
+  server.service.mockReturnValue({ batchGetUsers });
+  const text = 'For you it is mister river. It is a placebo switch.';
+  await turn([one, { ...two, body: text }]);
+  expect(batchGetUsers).toHaveBeenCalledWith(
+    { userIds: ['human', 'another'] },
+    { signal: expect.any(AbortSignal), timeoutMs: 10_000 }
+  );
+  const input = agent.reply.mock.calls[0]![1];
+  expect(input.context?.participants).toEqual([
+    { id: 'another', username: 'river', displayName: 'River' },
+    { id: 'human', username: 'cedar', displayName: 'Cedar' }
+  ]);
+  expect(JSON.parse(input.prompt).currentMessages[1]).toMatchObject({
+    author: 'another',
+    text
+  });
+});
+
+test('participant lookup failure stays retryable before delivery effects', async () => {
+  const beforeEffects = vi.fn();
+  const { server, agent, turn, one } = setup(beforeEffects);
+  server.service.mockReturnValue({
+    batchGetUsers: vi.fn().mockRejectedValue(new Error('Read failed'))
+  });
+  await expect(turn([one])).rejects.toThrow();
+  expect(beforeEffects).not.toHaveBeenCalled();
+  expect(agent.reply).not.toHaveBeenCalled();
+  expect(server.addReaction).not.toHaveBeenCalled();
+  expect(server.postMessage).not.toHaveBeenCalled();
+});
+
+test('refreshes names each turn and never supplies a deleted account name', async () => {
+  const { server, agent, turn, one } = setup();
+  const batchGetUsers = vi
+    .fn()
+    .mockResolvedValueOnce({
+      users: [
+        { user: { id: 'human', login: 'old-name', displayName: 'Old name' } },
+        { user: { id: 'another', login: 'deleted-name', displayName: 'Deleted', deleted: true } }
+      ]
+    })
+    .mockResolvedValueOnce({
+      users: [{ user: { id: 'human', login: 'new-name', displayName: 'New name' } }]
+    });
+  server.service.mockReturnValue({ batchGetUsers });
+  await turn([one]);
+  await turn([one]);
+  expect(agent.reply.mock.calls[0]![1].context?.participants).toEqual([
+    { id: 'human', username: 'old-name', displayName: 'Old name' }
+  ]);
+  expect(agent.reply.mock.calls[1]![1].context?.participants).toEqual([
+    { id: 'human', username: 'new-name', displayName: 'New name' }
+  ]);
 });

@@ -6,6 +6,15 @@
       "confirmation": "Durante 15 minutos, esto activa los permisos adicionales que tienes asignados en este servidor."
     },
     "notifications": {
+      "all_notifications": "Todas las notificaciones",
+      "all_types": "Todos los tipos",
+      "filter_status": "Estado",
+      "filter_type": "Tipo",
+      "reactions": "Reacciones",
+      "replies": "Respuestas",
+      "mentions": "Menciones",
+      "next_unread_source": "Ir a la siguiente fuente sin leer",
+      "no_unread": "No hay notificaciones sin leer",
       "title": "Notificaciones",
       "subtitle": "Esto es lo nuevo",
       "clear_read": "Borrar leídas",
@@ -29,12 +38,6 @@
         "room_invitation": "{actor} te ha invitado a una sala"
       }
     },
-    "sign_out": {
-      "title": "Cerrar sesión",
-      "current_server": "Servidor actual",
-      "all_servers": "Todos los servidores",
-      "description": "Cierra sesión solo en el servidor seleccionado o desconecta todos los servidores de este cliente."
-    },
     "overview": {
       "title": "Descripción general"
     },
@@ -44,6 +47,7 @@
       "administration": "Administración del servidor"
     },
     "user_menu": {
+      "edit_profile": "Editar perfil",
       "profile": "Perfil de usuario",
       "send_message": "Abrir conversación",
       "view_profile": "Ver perfil",
@@ -57,6 +61,9 @@
       "details": "Detalles del servidor"
     },
     "compatibility": {
+      "older_frontend": "Tu aplicación no admite todas las funciones de este servidor",
+      "frontend_upgrade": "Usas la versión {version} de la aplicación. Actualízala o pide al administrador del servidor que la proporciona que la actualice. El acceso a las funciones también depende de la configuración del servidor y de tus permisos.",
+      "frontend_requires": "Requiere la versión {version} de la aplicación o posterior",
       "title": "Compatibilidad",
       "view": "Ver compatibilidad",
       "limited": "Versión anterior del servidor",
@@ -172,12 +179,14 @@
       "members": "Miembros",
       "rooms": "Habitaciones",
       "moderation": "Moderación",
+      "roles": "Funciones",
       "permissions": "Permisos",
       "security": "Seguridad",
       "event_log": "Registro de eventos",
       "system": "Sistema",
       "back_to_server": "Regresar al Servidor",
-      "invitations": "Enlaces de invitación"
+      "invites": "Invitaciones",
+      "registration": "Registro"
     }
   }
 }

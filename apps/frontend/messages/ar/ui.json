@@ -1,5 +1,6 @@
 {
   "ui": {
+    "help": "المساعدة",
     "toggle_sidebar": "تبديل الشريط الجانبي",
     "notifications": "الإشعارات",
     "open_quick_switcher": "افتح المحول السريع",
@@ -7,7 +8,6 @@
     "realtime_paused": "توقفت التحديثات في الوقت الحقيقي مؤقتًا. جارٍ إعادة الاتصال...",
     "update_available": "يتوفر إصدار جديد",
     "reload": "إعادة التحميل",
-    "sign_out": "تسجيل الخروج",
     "close": "إغلاق",
     "auth_status": {
       "origin_title": "انتهت صلاحية الجلسة",
@@ -69,12 +69,14 @@
       "loading": "..."
     },
     "image_modal": {
+      "open_larger": "افتح بحجم أكبر",
       "previous": "الصورة السابقة",
       "next": "الصورة التالية",
       "fallback_alt": "صورة",
       "zoom_in": "تكبير",
       "zoom_out": "تصغير",
       "fit": "ملاءمة",
+      "pause_animation": "أوقف الحركة مؤقتًا",
       "details": "التفاصيل",
       "file_type": "نوع الملف"
     },

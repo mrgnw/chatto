@@ -1,0 +1,131 @@
+<script module lang="ts">
+  import { defineMeta } from '@storybook/addon-svelte-csf';
+  import { expect, waitFor } from 'storybook/test';
+  import RenderedImage from './RenderedImage.svelte';
+  const { Story } = defineMeta({ title: 'UI/RenderedImage', component: RenderedImage });
+</script>
+
+<script lang="ts">
+  import MarkdownHtml from './MarkdownHtml.svelte';
+  import DiagramTimelineTestHarness from './DiagramTimelineTestHarness.svelte';
+  import { renderMarkdown } from '$lib/markdown';
+  import RenderedImageViewerModal from '../../routes/chat/modals/RenderedImageViewerModal.svelte';
+  import type { RenderedImageViewerModalState } from '$lib/modal';
+
+  // Storybook has no app layout or router; mirror the modal owner for this preview.
+  let modal = $state<RenderedImageViewerModalState>();
+  /** Route the navigation mock's event to this mounted prototype story. */
+  function animationNavigation() {
+    const open = (event: Event) => {
+      const [, state] = (event as CustomEvent<[string, App.PageState]>).detail;
+      if (state.modal?.type === 'renderedImageViewer') modal = state.modal;
+    };
+    window.addEventListener('storybook:pushState', open);
+    return () => window.removeEventListener('storybook:pushState', open);
+  }
+  const parameters = {
+    sveltekit_experimental: {
+      navigation: {
+        pushState: (_url: string, state: App.PageState) => {
+          if (state.modal?.type === 'renderedImageViewer') modal = state.modal;
+        }
+      }
+    }
+  };
+  const source = 'flowchart LR\nA[Launch checks] --> B{Ready?}\nB -->|Yes| C[Depart]\nB -->|No| A';
+  const html = renderMarkdown(
+    `Code example:\n\n\u0060\u0060\u0060mermaid\n${source}\n\u0060\u0060\u0060\n\nVisual message:\n\n\u0060\u0060\u0060mermaid rendered\n${source}\n\u0060\u0060\u0060`
+  );
+  const timelineHtml = Promise.all(
+    Array.from({ length: 30 }, (_, index) =>
+      renderMarkdown(
+        `Diagram ${index}\n\n` +
+          `\u0060\u0060\u0060svg rendered\n<svg xmlns="http://www.w3.org/2000/svg" width="600" height="800"><title>Diagram ${index}</title><rect width="600" height="800" fill="#164e63"/></svg>\n\u0060\u0060\u0060\n\n` +
+          `\u0060\u0060\u0060mermaid rendered\n${source}\naccTitle: Diagram ${index}\n\u0060\u0060\u0060`
+      )
+    )
+  );
+  const aspectRatios = [
+    { name: 'Landscape', width: 1200, height: 600 },
+    { name: 'Portrait', width: 400, height: 800 },
+    { name: 'Square', width: 500, height: 500 },
+    { name: 'Very wide', width: 4000, height: 100 },
+    { name: 'Very tall', width: 100, height: 4000 },
+    { name: 'Small SVG enlarged', width: 100, height: 60 }
+  ].map(({ name, width, height }) => ({
+    name,
+    html: renderMarkdown(
+      `\u0060\u0060\u0060svg rendered\n<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="#164e63"/><circle cx="${width / 2}" cy="${height / 2}" r="${Math.min(width, height) * 0.3}" fill="#67e8f9"/></svg>\n\u0060\u0060\u0060`
+    )
+  }));
+  const smallMermaidHtml = renderMarkdown('```mermaid rendered\nflowchart LR\nA-->B\n```');
+  const animationHtml = renderMarkdown(
+    '```svg rendered\n' +
+      '<svg xmlns="http://www.w3.org/2000/svg" width="640" height="240" viewBox="0 0 640 240">' +
+      '<rect width="640" height="240" rx="12" fill="#164e63"/>' +
+      '<text x="32" y="46" fill="#cffafe" font-family="sans-serif" font-size="20">SVG animation playback</text>' +
+      '<path d="M60 128H580" stroke="#67e8f9" stroke-width="2"/>' +
+      '<circle cx="60" cy="128" r="18" fill="#fbbf24"><animate attributeName="cx" values="60;580;60" dur="6s" repeatCount="indefinite"/></circle>' +
+      '<g transform="translate(320 196)"><rect x="-12" y="-12" width="24" height="24" fill="#a5f3fc"><animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="4s" repeatCount="indefinite"/></rect></g>' +
+      '</svg>\n```'
+  );
+</script>
+
+<Story
+  name="SVG animation playback"
+  {parameters}
+  asChild
+  play={async ({ canvasElement }) => {
+    await waitFor(() =>
+      expect(
+        canvasElement.querySelector('iframe')?.contentDocument?.querySelector('svg')
+      ).toBeTruthy()
+    );
+  }}
+>
+  <div class="prose w-full max-w-2xl" {@attach animationNavigation}>
+    {#await animationHtml then value}<MarkdownHtml html={value} />{/await}
+  </div>
+  {#if modal}
+    <RenderedImageViewerModal {modal} onclose={() => (modal = undefined)} />
+  {/if}
+</Story>
+
+<Story name="Code and visual intent" {parameters} asChild>
+  <div class="prose w-full max-w-2xl">
+    {#await html then value}<MarkdownHtml html={value} />{/await}
+  </div>
+  {#if modal}
+    <RenderedImageViewerModal {modal} onclose={() => (modal = undefined)} />
+  {/if}
+</Story>
+
+<Story
+  name="Virtualized thread"
+  asChild
+  play={async ({ canvasElement }) => {
+    // Wait for async previews before auditing the scroll area's keyboard access.
+    // Loaded previews are native buttons; the loading placeholders are not controls.
+    await waitFor(
+      () =>
+        expect(canvasElement.querySelector('button.rendered-image:not(:disabled)')).not.toBeNull(),
+      { timeout: 10_000 }
+    );
+  }}
+>
+  {#await timelineHtml then html}<DiagramTimelineTestHarness {html} />{/await}
+</Story>
+
+<Story name="Aspect ratios" {parameters} asChild>
+  <div class="prose w-full max-w-5xl">
+    {#each aspectRatios as example (example.name)}
+      <p>{example.name}</p>
+      {#await example.html then value}<MarkdownHtml html={value} />{/await}
+    {/each}
+    <p>Small Mermaid diagram enlarged</p>
+    {#await smallMermaidHtml then value}<MarkdownHtml html={value} />{/await}
+  </div>
+  {#if modal}
+    <RenderedImageViewerModal {modal} onclose={() => (modal = undefined)} />
+  {/if}
+</Story>

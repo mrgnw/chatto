@@ -6,6 +6,8 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/chattocorp/chatto/cli/internal/readmodel"
+
 	"connectrpc.com/connect"
 	"github.com/chattocorp/chatto/cli/internal/core"
 	"github.com/chattocorp/chatto/cli/internal/parallel"
@@ -101,11 +103,20 @@ func (s *serverService) UpdateServerConfig(ctx context.Context, req *connect.Req
 		return nil, err
 	}
 
+	var admission *evtv1.RegistrationAdmission
+	if update := req.Msg.GetRegistration(); update != nil && update.Admission != nil {
+		value := evtv1.RegistrationAdmission_REGISTRATION_ADMISSION_OPEN
+		if update.GetAdmission() == apiv1.AccountCreationPolicy_ACCOUNT_CREATION_POLICY_INVITE_ONLY {
+			value = evtv1.RegistrationAdmission_REGISTRATION_ADMISSION_INVITE_ONLY
+		}
+		admission = &value
+	}
 	cfg, err := s.api.core.UpdateServerConfig(ctx, caller.UserID, core.ServerConfigUpdateInput{
-		ServerName:     req.Msg.ServerName,
-		Description:    req.Msg.Description,
-		MOTD:           req.Msg.Motd,
-		WelcomeMessage: req.Msg.WelcomeMessage,
+		RegistrationAdmission: admission,
+		ServerName:            req.Msg.ServerName,
+		Description:           req.Msg.Description,
+		MOTD:                  req.Msg.Motd,
+		WelcomeMessage:        req.Msg.WelcomeMessage,
 	})
 	if err != nil {
 		return nil, err
@@ -304,9 +315,10 @@ func adminNeighbor(neighbor core.Neighbor) *adminv1.Neighbor {
 
 func adminServerConfig(cfg *configv1.ServerConfig) *adminv1.ServerConfig {
 	if cfg == nil {
-		return &adminv1.ServerConfig{}
+		cfg = &configv1.ServerConfig{}
 	}
 	return &adminv1.ServerConfig{
+		Registration:   &adminv1.RegistrationSettings{Admission: apiAccountCreationPolicy(cfg.GetRegistrationAdmission())},
 		ServerName:     cfg.GetServerName(),
 		Description:    cfg.GetDescription(),
 		Motd:           cfg.GetMotd(),
@@ -373,7 +385,7 @@ func (a *API) viewerHasUnreadRooms(ctx context.Context, userID string) (bool, er
 		return false, err
 	}
 	var found atomic.Bool
-	_, err = parallel.Map(ctx, maxConnectAPIHydrationConcurrency, rooms, func(ctx context.Context, _ int, room *evtv1.Room) (struct{}, error) {
+	_, err = parallel.Map(ctx, maxConnectAPIHydrationConcurrency, rooms, func(ctx context.Context, _ int, room *readmodel.Room) (struct{}, error) {
 		if found.Load() {
 			return struct{}{}, nil
 		}

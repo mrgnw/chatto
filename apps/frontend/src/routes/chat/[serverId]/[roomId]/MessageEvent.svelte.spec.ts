@@ -18,6 +18,7 @@ import { messageEvent } from './messageEventFixture';
 import { MessageActionOverlayState } from './messageActionOverlayState.svelte';
 
 const mocks = vi.hoisted(() => ({
+  touchPrimary: false,
   copyImageToClipboard: vi.fn(),
   actions: {
     addReaction: vi.fn(),
@@ -49,8 +50,8 @@ vi.mock('$lib/utils/inputCapabilities', async (importOriginal) => {
   const actual = await importOriginal<typeof import('$lib/utils/inputCapabilities')>();
   return {
     ...actual,
-    prefersTouchActions: () => false,
-    supportsHoverActions: () => true
+    prefersTouchActions: () => mocks.touchPrimary,
+    supportsHoverActions: () => !mocks.touchPrimary
   };
 });
 
@@ -103,6 +104,7 @@ async function selectPickerEmoji(
 }
 
 beforeEach(() => {
+  mocks.touchPrimary = false;
   vi.clearAllMocks();
   for (const action of Object.values(mocks.actions)) action.mockResolvedValue(undefined);
 });
@@ -519,6 +521,33 @@ describe('MessageEvent action model integration', () => {
     expect(container.querySelector('[role="menu"]')).toBeNull();
   });
 
+  it.each([
+    '<span data-link-preview-trigger><a href="#">Link</a></span>',
+    '<dialog><button>Preview action</button></dialog>',
+    '<div popover><button>Preview action</button></div>'
+  ])('keeps message gestures out of child-owned surfaces: %s', async (html) => {
+    mocks.touchPrimary = true;
+    const actionOverlays = new MessageActionOverlayState();
+    const { container } = render(MessageEventTestHarness, {
+      props: { event: messageEvent(), actionOverlays }
+    });
+    const body = q(container, '[data-testid="message-body"]')!;
+    body.innerHTML = html;
+    const child = body.querySelector('a, button')!;
+    vi.useFakeTimers();
+    child.dispatchEvent(new Event('touchstart', { bubbles: true }));
+    child.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));
+    vi.advanceTimersByTime(600);
+    flushSync();
+    expect(actionOverlays.current).toBeNull();
+    // The message body itself still owns a normal long press.
+    body.dispatchEvent(new Event('touchstart', { bubbles: true }));
+    vi.advanceTimersByTime(500);
+    flushSync();
+    expect(actionOverlays.current?.kind).toBe('sheet');
+    vi.useRealTimers();
+  });
+
   it('closes the touch sheet when it is dismissed natively', async () => {
     const actionOverlays = new MessageActionOverlayState();
     const { container } = render(MessageEventTestHarness, {
@@ -537,6 +566,24 @@ describe('MessageEvent action model integration', () => {
     container.querySelector<HTMLDialogElement>('dialog[open]')!.close();
     await vi.waitFor(() => expect(actionOverlays.current).toBeNull());
   });
+
+  it.each(['dialog', 'div popover'])(
+    'ignores context menus retargeted into a child %s',
+    async (surface) => {
+      const actionOverlays = new MessageActionOverlayState();
+      const { container } = render(MessageEventTestHarness, {
+        props: { event: messageEvent(), actionOverlays }
+      });
+      const body = q(container, '[data-testid="message-body"]')!;
+      const tag = surface.split(' ')[0];
+      body.innerHTML = `<${surface}><span>Preview content</span></${tag}>`;
+      const nativeMenu = new MouseEvent('contextmenu', { bubbles: true, cancelable: true });
+      body.querySelector('span')!.dispatchEvent(nativeMenu);
+      flushSync();
+      expect(nativeMenu.defaultPrevented).toBe(true);
+      expect(actionOverlays.current).toBeNull();
+    }
+  );
 
   it('keeps the message menu for a mention without a current member', async () => {
     const rendered = render(MessageEventTestHarness, { props: { event: messageEvent() } });
@@ -604,6 +651,14 @@ describe('MessageEvent action model integration', () => {
     const body = q(rendered.container, '[data-testid="message-body"]')!;
     body.innerHTML = '<a href="/linked/path"><strong>Linked text</strong></a>';
     const link = q(body, 'a') as HTMLAnchorElement;
+    const nativeMenu = new MouseEvent('contextmenu', {
+      bubbles: true,
+      cancelable: true,
+      shiftKey: true
+    });
+    q(body, 'strong')!.dispatchEvent(nativeMenu);
+    expect(nativeMenu.defaultPrevented).toBe(false);
+    expect(menuButton(rendered.container, 'Copy link')).toBeUndefined();
     const click = new MouseEvent('contextmenu', {
       bubbles: true,
       cancelable: true,
@@ -751,6 +806,63 @@ describe('MessageEvent action model integration', () => {
   });
 
   it.each([RoomThreadingMode.ENABLED, RoomThreadingMode.ENCOURAGED, RoomThreadingMode.REQUIRED])(
+    'routes Reply on an existing empty thread into that thread in %s mode',
+    async (threadingMode) => {
+      const onOpenThread = vi.fn();
+      const event = messageEvent({ threadExists: true, replyCount: 0 });
+      const rendered = render(MessageEventTestHarness, {
+        props: { event, onOpenThread, threadingMode }
+      });
+      (q(rendered.container, 'button[aria-label="Reply"]') as HTMLButtonElement).click();
+      expect(onOpenThread).toHaveBeenCalledWith(
+        event.id,
+        expect.objectContaining({ reply: expect.objectContaining({ eventId: event.id }) })
+      );
+
+      onOpenThread.mockClear();
+      await openContextMenu(rendered.container);
+      menuButton(rendered.container, 'Reply')!.click();
+      expect(onOpenThread).toHaveBeenCalledWith(
+        event.id,
+        expect.objectContaining({ reply: expect.objectContaining({ eventId: event.id }) })
+      );
+    }
+  );
+
+  it('keeps Reply in room available for an existing thread in Enabled mode', async () => {
+    const onOpenThread = vi.fn();
+    const event = messageEvent({ threadExists: true });
+    const rendered = render(MessageEventTestHarness, {
+      props: { event, onOpenThread, threadingMode: RoomThreadingMode.ENABLED }
+    });
+    await openContextMenu(rendered.container);
+    menuButton(rendered.container, 'Reply in room')!.click();
+    expect(onOpenThread).not.toHaveBeenCalled();
+    await expect
+      .element(q(rendered.container, '[data-testid="active-reply-target"]'))
+      .toHaveTextContent(event.id);
+  });
+
+  it.each([
+    { threadingMode: RoomThreadingMode.ENABLED, threadExists: false },
+    { threadingMode: RoomThreadingMode.DISABLED, threadExists: true }
+  ])(
+    'keeps Reply in the room in $threadingMode mode with threadExists=$threadExists',
+    async ({ threadingMode, threadExists }) => {
+      const onOpenThread = vi.fn();
+      const event = messageEvent({ threadExists, replyCount: 0 });
+      const rendered = render(MessageEventTestHarness, {
+        props: { event, onOpenThread, threadingMode }
+      });
+      (q(rendered.container, 'button[aria-label="Reply"]') as HTMLButtonElement).click();
+      expect(onOpenThread).not.toHaveBeenCalled();
+      await expect
+        .element(q(rendered.container, '[data-testid="active-reply-target"]'))
+        .toHaveTextContent(event.id);
+    }
+  );
+
+  it.each([RoomThreadingMode.ENABLED, RoomThreadingMode.ENCOURAGED, RoomThreadingMode.REQUIRED])(
     'opens and focuses the thread without root attribution from the context menu in %s mode',
     async (threadingMode) => {
       const onOpenThread = vi.fn();
@@ -884,27 +996,30 @@ describe('MessageEvent action model integration', () => {
       .toHaveTextContent(event.id);
   });
 
-  it('falls back to an in-room reply in Encouraged mode without thread permission', async () => {
-    const event = messageEvent();
-    const onOpenThread = vi.fn();
-    const { container } = render(MessageEventTestHarness, {
-      props: {
-        event,
-        onOpenThread,
-        threadingMode: RoomThreadingMode.ENCOURAGED,
-        canPostMessage: true,
-        canPostInThread: false
-      }
-    });
+  it.each([RoomThreadingMode.ENABLED, RoomThreadingMode.ENCOURAGED])(
+    'falls back to an in-room reply without thread permission in %s mode',
+    async (threadingMode) => {
+      const event = messageEvent({ threadExists: true });
+      const onOpenThread = vi.fn();
+      const { container } = render(MessageEventTestHarness, {
+        props: {
+          event,
+          onOpenThread,
+          threadingMode,
+          canPostMessage: true,
+          canPostInThread: false
+        }
+      });
 
-    expect(q(container, 'button[aria-label="Reply"]')).toBeTruthy();
-    expect(q(container, 'button[aria-label="Reply in thread"]')).toBeNull();
-    (q(container, 'button[aria-label="Reply"]') as HTMLButtonElement).click();
-    expect(onOpenThread).not.toHaveBeenCalled();
-    await expect
-      .element(q(container, '[data-testid="active-reply-target"]'))
-      .toHaveTextContent(event.id);
-  });
+      expect(q(container, 'button[aria-label="Reply"]')).toBeTruthy();
+      expect(q(container, 'button[aria-label="Reply in thread"]')).toBeNull();
+      (q(container, 'button[aria-label="Reply"]') as HTMLButtonElement).click();
+      expect(onOpenThread).not.toHaveBeenCalled();
+      await expect
+        .element(q(container, '[data-testid="active-reply-target"]'))
+        .toHaveTextContent(event.id);
+    }
+  );
 
   it.each([true, false])('uses resolved interaction reply authority: %s', (allowed) => {
     const event = messageEvent();
@@ -967,9 +1082,7 @@ describe('MessageEvent action model integration', () => {
     const regular = messageEvent();
     const rendered = render(MessageEventTestHarness, { props: { event: regular } });
 
-    (
-      q(rendered.container, 'button[aria-label="Remove 👍 reaction (1)"]') as HTMLButtonElement
-    ).click();
+    (q(rendered.container, 'button[aria-label="👍 1"]') as HTMLButtonElement).click();
     await vi.waitFor(() =>
       expect(mocks.actions.toggleReaction).toHaveBeenLastCalledWith(
         expect.objectContaining({
@@ -1109,10 +1222,9 @@ describe('MessageEvent action model integration', () => {
     await rendered.rerender({ event: otherUsersMessage, canReact: false, onOpenThread });
 
     expect(q(rendered.container, 'button[aria-label="Edit message"]')).toBeNull();
-    expect(
-      (q(rendered.container, 'button[aria-label="Remove 👍 reaction (1)"]') as HTMLButtonElement)
-        .disabled
-    ).toBe(true);
+    expect((q(rendered.container, 'button[aria-label="👍 1"]') as HTMLButtonElement).disabled).toBe(
+      true
+    );
 
     vi.useFakeTimers();
     q(rendered.container, '[data-testid="message-row"]')!.dispatchEvent(

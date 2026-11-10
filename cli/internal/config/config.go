@@ -293,11 +293,6 @@ func (c *ChattoConfig) Validate() error {
 	}
 
 	// External auth providers
-	switch c.Auth.AccountCreationPolicyOrDefault() {
-	case AccountCreationPolicyOpen, AccountCreationPolicyInviteOnly:
-	default:
-		errs = append(errs, "auth.account_creation_policy must be one of: open, invite_only")
-	}
 	if c.Auth.TokenTTL.Duration() < 0 {
 		errs = append(errs, "auth.token_ttl must not be negative")
 	}
@@ -353,6 +348,22 @@ func (c *ChattoConfig) Validate() error {
 			errs = append(errs, prefix+".allowed_groups, groups_claim, and group_roles are only supported for OIDC")
 		}
 		groupRoles, err := ParseGroupRoles(provider.GroupRoles)
+		if provider.UpdateUsernames && !provider.ManageUsernames {
+			errs = append(errs, prefix+".update_usernames requires manage_usernames")
+		}
+		if provider.Type == AuthProviderTypeGoogle && provider.ManageUsernames {
+			// Explicit scopes replace the defaults selected by request_email.
+			emailRequested := provider.RequestEmailOrDefault()
+			if len(provider.Scopes) > 0 {
+				emailRequested = slices.Contains(provider.Scopes, "email") || slices.Contains(provider.Scopes, "https://www.googleapis.com/auth/userinfo.email")
+			}
+			if !emailRequested {
+				errs = append(errs, prefix+": managed Google usernames require email access; enable request_email or include email in explicit scopes")
+			}
+		}
+		if provider.UsernameClaim != "" && (provider.Type != AuthProviderTypeOpenIDConnect || strings.TrimSpace(provider.UsernameClaim) != provider.UsernameClaim) {
+			errs = append(errs, prefix+".username_claim requires OIDC and must not contain surrounding spaces")
+		}
 		if err != nil {
 			errs = append(errs, prefix+"."+err.Error())
 		}

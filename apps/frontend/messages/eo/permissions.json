@@ -1,6 +1,7 @@
 {
   "permissions": {
     "descriptions": {
+      "room_manage_notice": "Publikigi, korekti, reanonci kaj forigi ĉambrajn avizojn",
       "server_manage": "Ĝisdatigu servilajn agordojn (nomo, priskribo, emblemo)",
       "server_manage_neighbors": "Administri la publikan najbaran katalogon",
       "room_create": "Krei novajn ĉambrojn",
@@ -25,10 +26,11 @@
       "admin_view_audit": "Rigardu la revizian protokolon en administranto",
       "user_delete_any": "Forigu la konton de alia uzanto",
       "user_delete_self": "Forigu vian propran konton",
-      "user_invite": "Kreu kaj administru invitligilojn",
+      "user_manage_invites": "Kreu kaj administru kodojn. Ĉiu kodo permesas unu novan konton.",
+      "user_invite": "Krei kaj administri viajn proprajn invitkodojn.",
       "user_manage_accounts": "Kreu uzantojn, redaktu kontan identecon, restarigi pasvortojn, kunsendi kontrolitajn retpoŝtojn kaj malplenigi ensalutajn malfunkciojn",
       "user_manage_permissions": "Redakti rektajn per-uzantajn permesojn anstataŭigas",
-      "bot_create": "Krei robotajn kontojn, kiujn vi posedas",
+      "bot_create": "Krei robotajn kontojn",
       "bot_manage": "Vidi kaj administri ĉiujn robotajn kontojn",
       "call_start": "Komenci vokon (ankaŭ postulas call.join)",
       "call_join": "Aliĝi al aktiva voko",

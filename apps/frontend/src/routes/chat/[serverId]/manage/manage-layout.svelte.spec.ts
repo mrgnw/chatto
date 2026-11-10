@@ -46,10 +46,44 @@ beforeEach(() => {
 });
 
 describe('management route admission', () => {
+  it.each(['canManageServer'] as const)(
+    'admits Registration with %s and denies it after access is removed',
+    async (permission) => {
+      page.url = new URL('https://example.test/chat/origin/manage/server/registration');
+      server.permissions[permission] = true;
+      const { container } = render(Layout, {
+        props: { children: testSnippet('<p>Registration controls</p>') }
+      });
+      await tick();
+      expect(container.textContent).toContain('Registration controls');
+      server.permissions[permission] = false;
+      await tick();
+      expect(container.textContent).toContain('Access Denied');
+    }
+  );
+  it.each(['canInviteUsers', 'canManageInvites'] as const)(
+    'admits Invites, not Registration, with %s',
+    async (permission) => {
+      server.permissions[permission] = true;
+      page.url = new URL('https://example.test/chat/origin/manage/server/invites');
+      const { container, unmount } = render(Layout, {
+        props: { children: testSnippet('<p>Invite controls</p>') }
+      });
+      await tick();
+      expect(container.textContent).toContain('Invite controls');
+      await unmount();
+      page.url = new URL('https://example.test/chat/origin/manage/server/registration');
+      const registration = render(Layout, {
+        props: { children: testSnippet('<p>Registration controls</p>') }
+      });
+      await tick();
+      expect(registration.container.textContent).toContain('Access Denied');
+    }
+  );
   it.each(['', '/moderator'])(
     'admits role assigners to the role list and roster: %s',
     async (suffix) => {
-      page.url = new URL(`https://example.test/chat/origin/manage/server/permissions${suffix}`);
+      page.url = new URL(`https://example.test/chat/origin/manage/server/roles${suffix}`);
       server.permissions.canAdminManageRoles = false;
       server.permissions.canAssignRoles = true;
       const { container } = render(Layout, {
@@ -64,7 +98,7 @@ describe('management route admission', () => {
     }
   );
 
-  it.each(['/permissions/new', '/members'])(
+  it.each(['/roles/new', '/permissions', '/members'])(
     'keeps broader tools blocked for role assigners: %s',
     async (suffix) => {
       page.url = new URL(`https://example.test/chat/origin/manage/server${suffix}`);

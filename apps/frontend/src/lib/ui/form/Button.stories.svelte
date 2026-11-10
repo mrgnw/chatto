@@ -2,6 +2,7 @@
   import { defineMeta } from '@storybook/addon-svelte-csf';
   import Button from './Button.svelte';
   import Select from './Select.svelte';
+  import TouchPressFeedback from '$lib/components/TouchPressFeedback.svelte';
 
   const componentDescription = `
     Use Button for committed actions, form submits, destructive commands, and link-styled calls to
@@ -9,6 +10,11 @@
     strongest applicable tone for the action. Labelled buttons share the rounded-xl radius
     of chat input surfaces; icon-only buttons keep rounded-md corners. Filled buttons have a
     quiet shell lighting without a cast shadow. Ghost buttons stay flat; disabled buttons lose the raised finish.
+    Press a button with touch to see opacity feedback and a 1 px push down and right.
+    Mouse and pen input do not trigger these effects.
+    A ripple expands from the touch point and finishes after release.
+    Reduced motion keeps the opacity feedback without the shift or ripple.
+    Disabled and loading buttons keep their existing opacity while pressed.
   `.trim();
 
   const { Story } = defineMeta({
@@ -34,8 +40,18 @@
     'danger-secondary',
     'danger-ghost'
   ] as const;
-  const sizes = ['sm', 'md', 'lg'] as const;
+  const sizes = ['compact', 'xs', 'sm', 'md', 'lg'] as const;
 </script>
+
+<Story name="Press feedback" asChild>
+  <TouchPressFeedback />
+  <div class="flex flex-wrap items-center gap-3">
+    <Button>Press and hold</Button>
+    <Button variant="ghost">Quiet action</Button>
+    <Button disabled>Disabled</Button>
+    <Button loading loadingText="Saving…">Save</Button>
+  </div>
+</Story>
 
 <Story
   name="Variants"
@@ -119,7 +135,7 @@
     docs: {
       description: {
         story:
-          'Use md by default. Use sm in dense tables/toolbars and lg only when the surrounding layout has matching scale.'
+          'Use md (40 px minimum height) by default. Use compact (24 px) for panel title-line actions, xs or sm (32 px) for dense actions, and lg only when the surrounding layout has matching scale. Toasts retain the 32 px xs size.'
       }
     }
   }}

@@ -2,8 +2,10 @@
 @component
 
 Generic autocomplete popup with keyboard navigation.
-Renders a menu above the composer input with arrow key navigation,
-configurable selection keys, and customizable item rendering via snippets.
+Renders a menu above the composer input with keyboard navigation
+and customizable item rendering via snippets.
+Tab cycles through multiple matches and confirms a sole match. Shift+Tab cycles
+backwards. Enter confirms the highlighted match.
 
 Place it inside the positioned composer surface. An invisible marker covers
 that surface, and `FloatingPopover` anchors the menu to the marker in the top
@@ -13,12 +15,12 @@ never takes focus: the editor keeps focus and forwards keys to `handleKeyDown`.
 **Props:**
 - `items` - Array of items to display
 - `getKey` - Function to extract a unique key from each item
-- `selectKeys` - Which keys trigger selection (default: Enter and Tab)
 - `onSelect` - Callback when an item is selected (receives item and the key used)
 - `onClose` - Callback to close the popup
 - `testid` - Optional data-testid for e2e tests
 - `class` - Additional classes for the menu, such as a wider-screen width
 - `item` - Snippet to render each item (receives { item, selected })
+- `initialSelectedKey` - Item highlighted when results change
 -->
 <script lang="ts" generics="T">
   import type { Snippet } from 'svelte';
@@ -29,23 +31,23 @@ never takes focus: the editor keeps focus and forwards keys to `handleKeyDown`.
   type Props = {
     items: T[];
     getKey: (item: T) => string;
-    selectKeys?: string[];
     onSelect: (item: T, key: string) => void;
     onClose: () => void;
     testid?: string;
     class?: ClassValue;
     item: Snippet<[{ item: T; selected: boolean }]>;
+    initialSelectedKey?: string;
   };
 
   let {
     items,
     getKey,
-    selectKeys = ['Enter', 'Tab'],
     onSelect,
     onClose,
     testid,
     class: className,
-    item
+    item,
+    initialSelectedKey
   }: Props = $props();
 
   /** Viewport rect of the composer surface that the menu opens above. */
@@ -77,11 +79,14 @@ never takes focus: the editor keeps focus and forwards keys to `handleKeyDown`.
   }
 
   let selectedIndex = $derived.by(() => {
-    void items;
-    return 0;
+    return Math.max(
+      0,
+      items.findIndex((entry) => getKey(entry) === initialSelectedKey)
+    );
   });
 
   export function handleKeyDown(event: KeyboardEvent): boolean {
+    if (event.isComposing) return false;
     if (items.length === 0) return false;
 
     switch (event.key) {
@@ -97,12 +102,19 @@ never takes focus: the editor keeps focus and forwards keys to `handleKeyDown`.
         event.preventDefault();
         onClose();
         return true;
-      default:
-        if (selectKeys.includes(event.key)) {
-          event.preventDefault();
-          onSelect(items[selectedIndex], event.key);
-          return true;
+      case 'Tab':
+        event.preventDefault();
+        if (items.length === 1) {
+          onSelect(items[0], event.key);
+        } else {
+          selectedIndex = (selectedIndex + (event.shiftKey ? -1 : 1) + items.length) % items.length;
         }
+        return true;
+      case 'Enter':
+        event.preventDefault();
+        onSelect(items[selectedIndex], event.key);
+        return true;
+      default:
         return false;
     }
   }
@@ -114,22 +126,26 @@ never takes focus: the editor keeps focus and forwards keys to `handleKeyDown`.
     <FloatingPopover {anchor} anchorPlacement="top">
       <div
         data-testid={testid}
-        class={['flex max-h-80 w-[var(--autocomplete-anchor-width)] flex-col menu', className]}
+        class={[
+          'flex max-h-80 w-[var(--autocomplete-anchor-width)] flex-col menu text-sm md:w-80',
+          className
+        ]}
         style:--autocomplete-anchor-width={`${anchor.width}px`}
       >
         <!-- Scroll inside the section so the frame's inset and border stay visible. -->
         <ul class="min-h-0 overflow-y-auto menu-section">
           {#each items as entry, index (getKey(entry))}
-            <li>
+            <li
+              {@attach (el) => {
+                if (index === selectedIndex) el.scrollIntoView({ block: 'nearest' });
+              }}
+            >
               <button
                 type="button"
                 class={['menu-item', index === selectedIndex && 'menu-item-active']}
-                onmouseenter={() => (selectedIndex = index)}
+                onpointermove={() => (selectedIndex = index)}
+                onpointerdown={(event) => event.preventDefault()}
                 onclick={() => onSelect(entry, 'click')}
-                {@attach (el) => {
-                  // Keep the selected item in view during keyboard navigation
-                  if (index === selectedIndex) el.scrollIntoView({ block: 'nearest' });
-                }}
               >
                 {@render item({ item: entry, selected: index === selectedIndex })}
               </button>

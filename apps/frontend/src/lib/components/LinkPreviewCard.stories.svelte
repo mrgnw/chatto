@@ -63,8 +63,39 @@
   };
 </script>
 
+<Story
+  name="Text preview with delete action"
+  args={{
+    preview: {
+      url: 'https://example.com',
+      title: 'Chatto Preview Next',
+      description: 'Come join our community!',
+      siteName: 'Chatto Preview Next',
+      imageUrl: null
+    },
+    showDismiss: false,
+    canDelete: true
+  }}
+/>
+
 <Story name="Bluesky post" asChild>
   <div class="max-w-2xl p-4">
     <LinkPreviewCard preview={socialPost} showDismiss={false} />
   </div>
 </Story>
+
+<Story
+  name="Vimeo video"
+  args={{
+    preview: {
+      url: 'https://player.vimeo.com/video/76979871',
+      title: 'The New Vimeo Player',
+      description: null,
+      siteName: 'Vimeo',
+      imageUrl: null,
+      embedType: 'generic'
+    },
+    showDismiss: false,
+    canDelete: true
+  }}
+/>

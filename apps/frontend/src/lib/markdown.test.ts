@@ -34,6 +34,207 @@ describe('renderInlineMarkdown', () => {
 });
 
 describe('renderMarkdown', () => {
+  it.each(['svg', 'mermaid', 'ansi'])(
+    'uses only the rendered modifier for %s',
+    async (language) => {
+      const source = language === 'mermaid' ? 'flowchart LR\nA-->B' : 'source';
+      for (const modifier of ['rendered', 'RENDERED']) {
+        const html = await renderMarkdown(
+          '```' + language + ' ' + modifier + '\n' + source + '\n```'
+        );
+        expect(html).toContain('data-presentation="visual"');
+        expect(html).not.toContain('data-code-panel="source"');
+        expect(html).not.toContain('data-code-tab');
+        expect(html).toContain(`data-artifact="${language}"`);
+      }
+      for (const modifier of ['render', 'rendered extra']) {
+        const html = await renderMarkdown(
+          '```' + language + ' ' + modifier + '\n' + source + '\n```'
+        );
+        expect(html).not.toContain('data-artifact=');
+        expect(html).not.toContain('data-code-panel="source" hidden');
+      }
+    }
+  );
+
+  describe('Mermaid previews', () => {
+    it('recognises only the complete language hint and escapes fallback source', async () => {
+      const source = 'flowchart LR\nA["<img src=x onerror=alert(1)>"] --> B\n';
+      const html = await renderMarkdown('```Mermaid\n' + source + '```');
+      expect(html).toContain('data-artifact="mermaid"');
+      expect(html).toContain('data-copy-source="flowchart LR');
+      expect(html).not.toContain('<img');
+      for (const info of ['mermaid extra', 'mermaidish', 'text']) {
+        expect(await renderMarkdown('```' + info + '\n' + source + '```')).not.toContain(
+          'data-artifact="mermaid"'
+        );
+      }
+    });
+
+    it('bounds previews and leaves source configuration as code', async () => {
+      const fence = '```mermaid\nflowchart LR\nA-->B\n```';
+      expect(
+        (await renderMarkdown(Array(5).fill(fence).join('\n\n'))).match(/ disabled/g)
+      ).toHaveLength(1);
+      expect(await renderMarkdown('```mermaid\n' + 'x'.repeat(10_001) + '\n```')).toContain(
+        ' disabled'
+      );
+      expect(
+        await renderMarkdown('```mermaid\n%%{init: {}}%%\nflowchart LR\nA-->B\n```')
+      ).toContain(' disabled');
+      expect(
+        await renderMarkdown(
+          fence
+            .split('\n')
+            .map((line) => '> ' + line)
+            .join('\n')
+        )
+      ).toContain('data-artifact="mermaid"');
+    });
+  });
+  describe('SVG previews', () => {
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg"><text>Hi &amp; bye</text></svg>\n';
+
+    it('uses the rendered hint for visual-only output and keeps recovery source escaped', async () => {
+      for (const info of ['svg', 'xml', 'svg renderer', 'svg rendered extra']) {
+        expect(await renderMarkdown('```' + info + '\n' + svg + '```')).not.toContain('<img');
+      }
+      const html = await renderMarkdown('```svg rendered\n' + svg + '```');
+      expect(html).toContain('data-artifact="svg"');
+      expect(html).not.toContain('<img');
+      expect(html).not.toContain('<details>');
+      expect(html).not.toContain('data-code-panel="source"');
+      expect(await renderMarkdown('```svg\n' + svg + '```')).toContain(
+        'data-code-panel="render" hidden'
+      );
+      expect(html).not.toContain('<svg');
+      expect(html).toContain('data-artifact-source="&lt;svg');
+    });
+
+    it('supports nested fences and limits preview count and source length', async () => {
+      const fence = '```svg rendered\n' + svg + '```';
+      expect(
+        await renderMarkdown(
+          fence
+            .split('\n')
+            .map((line) => '> ' + line)
+            .join('\n')
+        )
+      ).toContain('data-artifact="svg"');
+      expect(
+        (await renderMarkdown(Array(5).fill(fence).join('\n\n'))).match(
+          /data-presentation="visual"/g
+        )
+      ).toHaveLength(4);
+      expect(await renderMarkdown('```svg rendered\n' + 'x'.repeat(100_001) + '\n```')).toContain(
+        ' disabled'
+      );
+    });
+  });
+  describe('emoji shortcodes', () => {
+    it('renders skin-tone compounds only in prose and retains invalid combinations', async () => {
+      const source =
+        ':thumbsup::skin-tone-4: :woman_health_worker::skin-tone-5: :heart::skin-tone-4: `:wave::skin-tone-2:`';
+      const expected = '👍🏽 👩🏾‍⚕️ :heart::skin-tone-4: <code>:wave::skin-tone-2:</code>';
+      expect(renderInlineMarkdown(source)).toBe(expected);
+      expect(await renderMarkdown(source)).toBe(`<p>${expected}</p>\n`);
+      const url = 'https://example.com/:wave::skin-tone-4:';
+      expect(await renderMarkdown(url)).toContain(`>${url.slice(0, -1)}</a>:`);
+    });
+
+    it('requires Unicode word boundaries without blocking punctuation or adjacent tags', async () => {
+      const source =
+        'omg:poop:foo hello:wave: :wave:hello ' +
+        'é:wave: :wave:中 𐐀:wave: :wave:𝟙 e\u0301:wave: :wave:\u0301 ' +
+        '(:poop:)! :wave::heart:';
+      const expected = source.replace('(:poop:)! :wave::heart:', '(💩)! 👋❤️');
+      expect(renderInlineMarkdown(source)).toBe(expected);
+      expect(await renderMarkdown(source)).toBe(`<p>${expected}</p>\n`);
+    });
+
+    it.each(['_:+1:', ':heart:_'])(
+      'keeps a tag beside a literal underscore: %s',
+      async (source) => {
+        expect(renderInlineMarkdown(source)).toBe(source);
+        expect(await renderMarkdown(source)).toBe(`<p>${source}</p>\n`);
+      }
+    );
+
+    it('keeps a word boundary when mention parsing splits the text', async () => {
+      const html = await renderMarkdown('@alice:wave: @alice :wave:', { mentions: true });
+      expect(html).toContain('<span data-mention-handle="alice">@alice</span>:wave:');
+      expect(html).toContain('<span data-mention-handle="alice">@alice</span> 👋');
+    });
+
+    it.each([
+      ['https://example.com:wave:', '</a>:wave:'],
+      ['https://example.com :wave:', '</a> 👋'],
+      ['https://example.com!:wave:', '</a>!👋'],
+      ['<https://example.com>:wave:', '</a>👋'],
+      ['[site](https://example.com):wave:', '</a>👋']
+    ])('preserves the source boundary after links: %s', async (source, suffix) => {
+      expect(renderInlineMarkdown(source)).toContain(suffix);
+      expect(await renderMarkdown(source)).toContain(suffix);
+    });
+
+    it('renders a large Markdown attachment without exceeding the argument limit', async () => {
+      const count = 100_000;
+      const html = await renderMarkdown(':wave: '.repeat(count));
+      expect(html.match(/👋/g)).toHaveLength(count);
+      expect(html).not.toContain(':wave:');
+    });
+
+    it('renders aliases and adjacent tags while preserving Unicode and unknown names', async () => {
+      const source = ':wave::heart: :+1: :-1: 👋 :foo: :WAVE: :constructor: :wave';
+      expect(await renderMarkdown(source)).toBe(
+        '<p>👋❤️ 👍 👎 👋 :foo: :WAVE: :constructor: :wave</p>\n'
+      );
+      expect(renderInlineMarkdown(source)).toBe('👋❤️ 👍 👎 👋 :foo: :WAVE: :constructor: :wave');
+    });
+
+    it('renders prose in formatting, quotes, tables, and footnotes', async () => {
+      const html = await renderMarkdown(
+        '**:wave:** _:+1:_\n\n> :heart:\n\n' +
+          '| Emoji |\n| --- |\n| :wave: |\n\nNote[^one]\n\n[^one]: :heart:'
+      );
+      expect(html).toContain('<strong>👋</strong> <em>👍</em>');
+      expect(html).toContain('<blockquote>\n<p>❤️</p>');
+      expect(html).toContain('<td>👋</td>');
+      expect(html).toContain('tabindex="-1"><p>❤️');
+    });
+
+    it('keeps inline, fenced, and indented code literal', async () => {
+      const html = await renderMarkdown('`:wave:`\n\n```text\n:heart:\n```\n\n    :+1:');
+      expect(html).toContain('<code>:wave:</code>');
+      expect(html).toContain('</span>:heart:</span>');
+      expect(html).toContain('</span>:+1:</span>');
+      expect(html).not.toMatch(/👋|❤️|👍/);
+      expect(renderInlineMarkdown('`:wave:`')).toBe('<code>:wave:</code>');
+    });
+
+    it('preserves URL labels, destinations, and titles but renders explicit link labels', async () => {
+      const html = await renderMarkdown(
+        'https://example.com/:wave: <https://example.com/:heart:> ' +
+          '[:+1:](https://example.com/:wave: ":heart:")'
+      );
+      expect(html).toContain('>https://example.com/:wave</a>:');
+      expect(html).toContain('>https://example.com/:heart:</a>');
+      expect(html).toContain('href="https://example.com/:wave:"');
+      expect(html).toContain('title=":heart:"');
+      expect(html).toContain('>👍</a>');
+      expect(html).not.toMatch(/👋|❤️/);
+    });
+
+    it('preserves mentions and escapes HTML around shortcodes', async () => {
+      const html = await renderMarkdown('<script>:wave:</script> @alice :heart:', {
+        mentions: true
+      });
+      expect(html).toContain('&lt;script&gt;👋&lt;/script&gt;');
+      expect(html).toContain('<span data-mention-handle="alice">@alice</span> ❤️');
+      expect(html).not.toContain('<script>');
+    });
+  });
+
   describe('footnotes', () => {
     it('numbers notes in reference order and returns to each repeated reference', async () => {
       const html = await renderMarkdown(
@@ -74,7 +275,7 @@ describe('renderMarkdown', () => {
 
       expect(html).toContain('Unknown[^missing]');
       expect(html).toContain('<code>[^known]</code>');
-      expect(html).toContain('<span class="line">[^known]</span>');
+      expect(html).toContain('</span>[^known]</span>');
       expect(html).not.toContain('class="footnotes"');
       expect(html).not.toContain('Unused note.');
     });
@@ -244,7 +445,7 @@ describe('renderMarkdown', () => {
       const html = await renderMarkdown('`&nbsp;`\n\n```text\n&nbsp;\n```');
 
       expect(html).toContain('<code>&amp;nbsp;</code>');
-      expect(html).toContain('<span class="line">&amp;nbsp;</span>');
+      expect(html).toContain('</span>&amp;nbsp;</span>');
     });
 
     it('preserves entity spellings Markdown-it does not decode', async () => {
@@ -269,6 +470,27 @@ describe('renderMarkdown', () => {
   });
 
   describe('emphasis at word boundaries', () => {
+    it.each(['مرحبا', 'שלום', 'привіт', 'привет', '中文', '日本語', 'e\u0301', '𐐀𐐨'])(
+      'formats Unicode words and combining marks: %s',
+      async (word) => {
+        const html = await renderMarkdown(`**${word}** *${word}* __${word}__`);
+        expect(html).toContain(`<strong>${word}</strong>`);
+        expect(html).toContain(`<em>${word}</em>`);
+        expect(html).toContain(`<u>${word}</u>`);
+        expect(renderInlineMarkdown(`**${word}**`)).toContain(`<strong>${word}</strong>`);
+      }
+    );
+
+    it.each(['مرحبا', 'שלום', 'привет', '日本語', 'e\u0301', '𐐀𐐨'])(
+      'keeps punctuation around emphasized Unicode words: %s',
+      async (word) => {
+        const html = await renderMarkdown(`*...${word}:* **${word}:** **${word}**`);
+        expect(html).toContain(`<em>...${word}:</em>`);
+        expect(html).toContain(`<strong>${word}:</strong>`);
+        expect(html).toContain(`<strong>${word}</strong>`);
+      }
+    );
+
     it('renders `*italic*` as italic', async () => {
       const html = await renderMarkdown('*italic*');
       expect(html).toContain('<em>italic</em>');
@@ -358,6 +580,36 @@ describe('renderMarkdown', () => {
   });
 
   describe('emphasis suppressed when not at word boundaries', () => {
+    it.each(['имя_поля_значение', '字*中*字', 'e\u0301*mot*e\u0301', '𐐀*𐐨*𐐀'])(
+      'keeps Unicode intraword markers literal: %s',
+      async (source) => {
+        const html = await renderMarkdown(source);
+        expect(html).toContain(source);
+        expect(html).not.toContain('<em>');
+      }
+    );
+
+    it.each(['*(x)*', '_(ツ)_/¯', '*(ツ)*'])(
+      'keeps parenthesized single-glyph faces literal: %s',
+      async (source) => {
+        const html = await renderMarkdown(source);
+        expect(html).toContain(source);
+        expect(html).not.toContain('<em>');
+      }
+    );
+
+    it('does not mistake parenthesized words for single-glyph faces', async () => {
+      const html = await renderMarkdown('*(hello)* *(日本語)*');
+      expect(html).toContain('<em>(hello)</em>');
+      expect(html).toContain('<em>(日本語)</em>');
+    });
+
+    it('allows explicit double-marker formatting around single-glyph faces', async () => {
+      const html = await renderMarkdown('**(ツ)** __(x)__');
+      expect(html).toContain('<strong>(ツ)</strong>');
+      expect(html).toContain('<u>(x)</u>');
+    });
+
     it('does not italicize underscores between punctuation', async () => {
       const html = await renderMarkdown('_(ツ)_/¯');
       expect(html).toContain('_(ツ)_/¯');
@@ -418,9 +670,7 @@ describe('renderMarkdown', () => {
       expect(html).toContain('<pre class="hljs markdown-code" data-language="js"');
       expect(html).toContain('language-js');
       expect(html).toContain('hljs-keyword');
-      expect(html).toContain(
-        '<span class="markdown-code-actions"><span class="markdown-code-language">js</span><button'
-      );
+      expect(html).toContain('<span class="markdown-code-language">js</span>');
       expect(html).toContain('data-markdown-copy');
     });
 
@@ -480,7 +730,7 @@ describe('renderMarkdown', () => {
       const html = await renderMarkdown('    first\n    second\n\n`inline`');
 
       expect(html).toContain('data-copy-source="first\nsecond\n"');
-      expect(html).toContain('<span class="markdown-code-actions"><button');
+      expect(html).toContain('<span class="markdown-code-language">text</span>');
       expect(html.match(/data-markdown-copy/g)).toHaveLength(1);
       expect(html).toContain('<code>inline</code>');
     });
@@ -488,6 +738,34 @@ describe('renderMarkdown', () => {
 });
 
 describe('automatic links', () => {
+  it.each([
+    'https://example.com/',
+    'http://example.com:8080/',
+    'https://example.com/chat/-/R123456789abcde',
+    'https://example.com/chat/-/user/U123456789abcde',
+    'https://example.com/chat/-/R123456789abcde/m/Eabc123DEF456gh',
+    'www.example.com/'
+  ])('leaves a following colon outside the automatic link: %s', async (url) => {
+    const href = url.startsWith('www.') ? `https://${url}` : url;
+    for (const suffix of [':', ': next', ':!', ':: next']) {
+      const source = `${url}${suffix}`;
+      for (const html of [await renderMarkdown(source), renderInlineMarkdown(source)]) {
+        expect(html).toContain(`data-content-href="${href}"`);
+        expect(html).toContain(`>${url}</a>${suffix}`);
+        expect(html).toContain('data-entity-autolink');
+      }
+    }
+  });
+
+  it('keeps colons within URLs and in explicit destinations', async () => {
+    for (const url of ['https://example.com:8080/a:b?q=c:d#e:f', 'www.example.com/a:b']) {
+      expect(await renderMarkdown(url)).toContain(`>${url}</a>`);
+    }
+    for (const source of ['[label](https://example.com/a:)', '<https://example.com/a:>']) {
+      expect(await renderMarkdown(source)).toContain('data-content-href="https://example.com/a:"');
+    }
+  });
+
   it.each([
     'path/www.example.com',
     '@www.example.com',

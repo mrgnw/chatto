@@ -16,7 +16,7 @@ on:
 
 concurrency:
   # PRs share a group so superseded revisions are cancelled. Pushes use their
-  # immutable commit SHA so every main commit can publish an image.
+  # immutable commit SHA so each selected main commit can publish an image.
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
@@ -28,29 +28,39 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
+      contents: read
       pull-requests: read
     outputs:
-      chatto: ${{ github.event_name != 'pull_request' || steps.select.outputs.common == 'true' || steps.select.outputs.chatto == 'true' }}
-      desktop: ${{ github.event_name != 'pull_request' || steps.select.outputs.common == 'true' || steps.select.outputs.desktop == 'true' }}
-      authling: ${{ github.event_name != 'pull_request' || steps.select.outputs.common == 'true' || steps.select.outputs.authling == 'true' }}
-      translatto: ${{ github.event_name != 'pull_request' || steps.select.outputs.common == 'true' || steps.select.outputs.translatto == 'true' }}
-      runling: ${{ github.event_name != 'pull_request' || steps.select.outputs.common == 'true' || steps.select.outputs.runling == 'true' }}
-      chattobot: ${{ github.event_name != 'pull_request' || steps.select.outputs.common == 'true' || steps.select.outputs.chattobot == 'true' }}
-      botto: ${{ github.event_name != 'pull_request' || steps.select.outputs.common == 'true' || steps.select.outputs.botto == 'true' }}
-      docs: ${{ github.event_name != 'pull_request' || steps.select.outputs.common == 'true' || steps.select.outputs.docs == 'true' }}
+      chatto: ${{ steps.select.outputs.common == 'true' || steps.select.outputs.chatto == 'true' }}
+      desktop: ${{ steps.select.outputs.common == 'true' || steps.select.outputs.desktop == 'true' }}
+      authling: ${{ steps.select.outputs.common == 'true' || steps.select.outputs.authling == 'true' }}
+      translatto: ${{ steps.select.outputs.common == 'true' || steps.select.outputs.translatto == 'true' }}
+      runling: ${{ steps.select.outputs.common == 'true' || steps.select.outputs.runling == 'true' }}
+      chattobot: ${{ steps.select.outputs.common == 'true' || steps.select.outputs.chattobot == 'true' }}
+      botto: ${{ steps.select.outputs.common == 'true' || steps.select.outputs.botto == 'true' }}
+      docs: ${{ steps.select.outputs.common == 'true' || steps.select.outputs.docs == 'true' }}
     steps:
+      # Push filters use git; pull request filters use the GitHub API.
+      - name: Checkout for push change detection
+        if: github.event_name == 'push'
+        uses: actions/checkout@v6
+
       - name: Select affected products
-        if: github.event_name == 'pull_request'
         id: select
         uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4
         with:
+          # Compare the exact push endpoints, including multi-commit pushes.
+          # Pull requests use the API and do not need these git inputs.
+          base: ${{ github.event_name == 'push' && github.event.before || '' }}
+          ref: ${{ github.event_name == 'push' && github.sha || '' }}
           predicate-quantifier: some-with-excludes
-          # Release-please writes changelogs and the release manifest. Only
-          # release tooling reads the changelogs, so they do not select product
-          # jobs. Of the products, only a Runling test reads the manifest.
+          # Sweet notes and changelogs do not select product jobs.
+          # Release preparation still reads notes on main. Package-local
+          # manifests select their own product checks.
           # Version files in release pull requests still select their product.
           filters: |
             chatto:
+              - 'ci/**'
               # Authling changes must also verify login and profile transfer into Chatto.
               - 'authling/**'
               - 'cli/**'
@@ -60,26 +70,27 @@ jobs:
               - 'proto/**'
               - 'docker/**'
               - '!**/CHANGELOG.md'
+              - '!**/.sweet/**'
             authling:
               # Go workspace dependency selection can change across product modules.
               - 'cli/go.{mod,sum}'
               - 'authling/**'
               - 'pkg/**'
               - '!**/CHANGELOG.md'
+              - '!**/.sweet/**'
             translatto:
               - 'packages/translatto/**'
-              - '.release-please-config.json'
-              - '.release-please-manifest.json'
               - '!**/CHANGELOG.md'
+              - '!**/.sweet/**'
             runling:
               - 'packages/runling/**'
               # The Runling bot example uses the Chatto client.
               - 'packages/chatto-client/**'
               - 'packages/api-types/**'
               - 'examples/runling-bot/**'
-              # A release test compares the manifest with the Runling version.
-              - '.release-please-manifest.json'
+              # Runling owns its release manifest.
               - '!**/CHANGELOG.md'
+              - '!**/.sweet/**'
             chattobot:
               - 'packages/chattobot/**'
               - 'packages/runling/**'
@@ -87,6 +98,7 @@ jobs:
               - 'packages/api-types/**'
               - 'proto/**'
               - '!**/CHANGELOG.md'
+              - '!**/.sweet/**'
             botto:
               - 'examples/botto/**'
               - 'packages/runling/**'
@@ -94,17 +106,24 @@ jobs:
               - 'packages/api-types/**'
               - 'proto/**'
               - '!**/CHANGELOG.md'
+              - '!**/.sweet/**'
             docs:
               - 'apps/docs-website/**'
               - '!**/CHANGELOG.md'
+              - '!**/.sweet/**'
             desktop:
               - 'apps/desktop/**'
-              - 'apps/frontend/**'
-              - 'packages/**'
-              - '!packages/runling/**'
+              # Ordinary frontend changes use the browser build and tests.
+              # Native integration and build inputs still verify every package.
+              - 'apps/frontend/src/lib/desktop/**'
+              - 'apps/frontend/{package.json,vite.config.*,svelte.config.*,tsconfig.json}'
+              - 'apps/frontend/scripts/**'
+              - 'apps/frontend/static/**'
+              - 'packages/{api-types,chatto-client,translatto}/**'
               - 'proto/**'
               - 'tools/test-desktop-*'
               - '!**/CHANGELOG.md'
+              - '!**/.sweet/**'
             # Files outside product roots and repository documentation run all products.
             common:
               - '**'
@@ -112,9 +131,14 @@ jobs:
               - '!apps/{frontend,desktop,docs-website}/**'
               - '!examples/botto/**'
               - '!tools/test-desktop-*'
+              # Repository tooling tests run in the unconditional workflow-lint job.
+              - '!tools/*.test.mjs'
               - '!{docs,.agents,.claude,.conductor}/**'
+              - '!skills-lock.json'
+              # Experimental modules have their own workflow.
+              - '!experimental/**'
               - '!*.md'
-              - '!.release-please-manifest.json'
+              - '!**/.sweet/**'
 
   test-translatto-package:
     needs: changes
@@ -147,6 +171,10 @@ jobs:
       - uses: ./.github/actions/setup
         with:
           install-cli-deps: 'false'
+      - name: Verify runtime build after clean
+        run: |
+          mise clean
+          mise x -- pnpm --filter runling build:runtime
       - run: mise check-runling
       - run: mise test-runling
       - run: mise test-runling-bot
@@ -187,7 +215,8 @@ jobs:
       - run: mise test-chattobot
 
   build-main-image-contexts:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: changes
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.chatto == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     outputs:
@@ -294,14 +323,8 @@ jobs:
       - name: Check workflows and shell scripts
         run: mise lint-actions
 
-      - name: Test release publication policy
-        run: mise test-release-policy
-
-      - name: Test interchange format contract
-        run: mise test-interchange
-
-      - name: Test development launchers and routing
-        run: mise test-dev-tooling
+      - name: Test repository tooling
+        run: mise test-repo-tooling
 
   desktop:
     needs: changes
@@ -315,9 +338,12 @@ jobs:
           - platform: linux
             os: ubuntu-latest
             artifact-path: apps/desktop/dist/chatto-desktop
+          - platform: linux-arm64
+            os: ubuntu-24.04-arm
+            artifact-path: apps/desktop/dist/chatto-desktop
           - platform: macos
             os: macos-15
-            artifact-path: apps/desktop/dist/Chatto Desktop.app
+            artifact-path: apps/desktop/dist/Chatto.app
           - platform: windows
             os: windows-latest
             artifact-path: apps/desktop/dist/windows
@@ -337,6 +363,23 @@ jobs:
         with:
           configuration: release
 
+      - name: Cache Electron downloads
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cache/electron
+            ~/.cache/electron-builder
+            ~/Library/Caches/electron
+            ~/Library/Caches/electron-builder
+            ~/AppData/Local/electron/Cache
+            ~/AppData/Local/electron-builder/Cache
+          key: electron-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('apps/desktop/package.json') }}
+          restore-keys: |
+            electron-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Install Electron
+        run: node tools/ci-retry-download.mjs node apps/desktop/node_modules/electron/install.js
+
       - name: Check and test desktop shell
         run: mise test-desktop
 
@@ -353,6 +396,25 @@ jobs:
         if: runner.os == 'Windows'
         run: mise x -- pnpm --filter chatto-desktop build:windows-installer
 
+      - name: Build Linux AppImage
+        if: runner.os == 'Linux'
+        # Packaging downloads builder binaries. Retry only transport failures;
+        # ordinary packaging errors still fail on the first attempt.
+        run: node tools/ci-retry-download.mjs pnpm --filter chatto-desktop build:linux-appimage
+
+      - name: Verify Linux launcher and icons
+        if: runner.os == 'Linux'
+        run: bash tools/test-desktop-linux.sh
+
+      - name: Upload Linux AppImage
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v7
+        with:
+          name: chatto-desktop-linux-appimage-${{ runner.arch }}
+          path: apps/desktop/dist/appimage/*.AppImage
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Test Windows installer
         if: runner.os == 'Windows'
         shell: pwsh
@@ -360,28 +422,50 @@ jobs:
           $installer = @(Get-ChildItem apps/desktop/dist/installer/*_Setup.exe)
           if ($installer.Count -ne 1) { throw 'Expected one Windows installer.' }
           ./tools/test-desktop-windows-installer.ps1 -Installer $installer[0].FullName
+          $msi = @(Get-ChildItem apps/desktop/dist/installer/*_Setup.msi)
+          if ($msi.Count -ne 1) { throw 'Expected one Windows MSI package.' }
+          mise x -- pnpm --filter chatto-desktop build:windows-installer --msi-upgrade-fixture
+          if ($LASTEXITCODE -ne 0) { throw 'MSI upgrade fixture build failed.' }
+          ./tools/test-desktop-windows-msi.ps1 -Installer $msi[0].FullName -PreviousInstaller apps/desktop/dist/msi-upgrade-fixture/upgrade-fixture.msi
 
       - name: Upload unsigned Windows installer
         if: runner.os == 'Windows'
         uses: actions/upload-artifact@v7
         with:
           name: chatto-desktop-windows-installer-unsigned
-          path: apps/desktop/dist/installer/*_Setup.exe
+          path: |
+            apps/desktop/dist/installer/*_Setup.exe
+            apps/desktop/dist/installer/*_Setup.msi
           if-no-files-found: error
           retention-days: 7
 
       - name: Verify macOS bundle signature
         if: runner.os == 'macOS'
-        run: codesign --verify --deep --strict --verbose=2 "apps/desktop/dist/Chatto Desktop.app"
+        run: codesign --verify --deep --strict --verbose=2 "apps/desktop/dist/Chatto.app"
 
       - name: Verify macOS game-capture helper
         if: runner.os == 'macOS'
         shell: bash
         run: |
-          helper="apps/desktop/dist/Chatto Desktop.app/Contents/Helpers/Chatto Capture Helper.app/Contents/MacOS/chatto-macos-capture-probe"
+          helper="apps/desktop/dist/Chatto.app/Contents/Helpers/Chatto Helper.app/Contents/MacOS/chatto-macos-capture-probe"
           test -x "$helper"
           "$helper" help | grep -F 'publish --window'
           otool -l "$helper" | grep -F '@executable_path/../Frameworks'
+
+      - name: Build and test unsigned macOS DMG
+        if: runner.os == 'macOS'
+        run: |
+          mise x -- pnpm --filter chatto-desktop build:macos-dmg
+          bash tools/test-desktop-macos-dmg.sh apps/desktop/dist/dmg/*.dmg
+
+      - name: Upload unsigned macOS DMG
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v7
+        with:
+          name: chatto-desktop-macos-dmg-unsigned
+          path: apps/desktop/dist/dmg/*.dmg
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Upload desktop bundle
         uses: actions/upload-artifact@v7
@@ -411,6 +495,9 @@ jobs:
   codegen-proto-drift:
     needs: changes
     if: ${{ !cancelled() }}
+    # Always verify selection, but skip product checks for unrelated changes.
+    env:
+      RUN_PROTO_CHECKS: ${{ needs.changes.outputs.chatto == 'true' || needs.changes.outputs.authling == 'true' }}
     # runs-on: ubicloud-standard-4
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -421,22 +508,18 @@ jobs:
         run: test "$SELECTION_RESULT" = success
 
       - name: Checkout code
+        if: env.RUN_PROTO_CHECKS == 'true'
         uses: actions/checkout@v6
         with:
           # The threshold check compares the PR head with its merge base.
           fetch-depth: 0
 
       - name: Setup environment
+        if: env.RUN_PROTO_CHECKS == 'true'
         uses: ./.github/actions/setup
 
-      - name: Test server compatibility label check
-        run: mise x -- node --test tools/check-server-compatibility.test.mjs
-
-      - name: Test Slack importer
-        run: mise x -- python3 -B -m unittest discover -s tools -p 'test_slack*.py'
-
       - name: Check server compatibility threshold labels
-        if: github.event_name == 'pull_request'
+        if: env.RUN_PROTO_CHECKS == 'true' && github.event_name == 'pull_request'
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -449,27 +532,29 @@ jobs:
       # public API breaks exist only on pull requests. The target branch can
       # also move during a push run, so a shallow fetch of it is not stable.
       - name: Fetch protobuf breaking base
-        if: github.event_name == 'pull_request'
+        if: env.RUN_PROTO_CHECKS == 'true' && github.event_name == 'pull_request'
         run: |
           base_ref="${GITHUB_BASE_REF}"
-          git fetch --no-tags --depth=1 origin "${base_ref}:refs/remotes/origin/${base_ref}"
+          git fetch --no-tags origin "${base_ref}:refs/remotes/origin/${base_ref}"
 
       - name: Lint Chatto protobufs
+        if: env.RUN_PROTO_CHECKS == 'true'
         run: mise lint-proto
 
       - name: Check storage, internal, and Operator protobuf breaking changes
-        if: github.event_name == 'pull_request'
+        if: env.RUN_PROTO_CHECKS == 'true' && github.event_name == 'pull_request'
         run: |
           base_ref="${GITHUB_BASE_REF}"
           mise x -- node tools/check-storage-proto-breaking.mjs \
             "../.git#branch=origin/${base_ref},subdir=proto"
 
       - name: Check projection snapshot schema contracts
+        if: env.RUN_PROTO_CHECKS == 'true'
         working-directory: cli
         run: mise x -- go test ./internal/core -run TestProjectionSnapshotContractsIncludeCurrentSchema -count=1
 
       - name: Check public protobuf packages without acknowledged breaks
-        if: github.event_name == 'pull_request'
+        if: env.RUN_PROTO_CHECKS == 'true' && github.event_name == 'pull_request'
         run: |
           base_ref="${GITHUB_BASE_REF}"
           cd proto
@@ -485,7 +570,7 @@ jobs:
           done
 
       - name: Check Authling persisted protobuf breaking changes
-        if: github.event_name == 'pull_request'
+        if: env.RUN_PROTO_CHECKS == 'true' && github.event_name == 'pull_request'
         run: |
           base_ref="${GITHUB_BASE_REF}"
           if git cat-file -e "origin/${base_ref}:authling/buf.yaml" 2>/dev/null; then
@@ -498,16 +583,19 @@ jobs:
           fi
 
       - name: Lint Authling protobufs
+        if: env.RUN_PROTO_CHECKS == 'true'
         working-directory: authling
         run: mise x -- buf lint
 
       - name: Regenerate protobuf bindings
+        if: env.RUN_PROTO_CHECKS == 'true'
         run: |
           mise codegen-proto
           cd authling
           mise codegen-proto
 
       - name: Check generated protobuf bindings are current
+        if: env.RUN_PROTO_CHECKS == 'true'
         run: |
           if ! git diff --exit-code; then
             git status --short
@@ -538,18 +626,50 @@ jobs:
       - name: Build Storybook design-system catalog
         run: pnpm run build:storybook
 
+  check-unused:
+    needs: changes
+    # Check every root pnpm workspace, including docs-only and example-only changes.
+    if: ${{ needs.changes.outputs.chatto == 'true' || needs.changes.outputs.desktop == 'true' || needs.changes.outputs.docs == 'true' || needs.changes.outputs.botto == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: ./.github/actions/setup
+        with:
+          install-cli-deps: 'false'
+      - name: Check unused files and dependencies
+        run: pnpm run knip
+
+  check-format:
+    # Check all PRs, including changes that only affect repository documentation.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+      - uses: ./.github/actions/setup
+        with:
+          install-cli-deps: 'false'
+      - name: Check changed files
+        env:
+          FORMAT_BASE: ${{ github.event.pull_request.base.sha }}
+        run: pnpm run format:changed -- "$FORMAT_BASE"
+
   test-workspace-packages:
     needs: changes
     if: ${{ needs.changes.outputs.chatto == 'true' }}
     # The frontend suite is the longest, so it runs on its own runner. The other
-    # entry excludes only the frontend, so new workspace tests run without a
-    # matrix change.
+    # entry excludes the frontend; both entries exclude local experiments.
+    # New product workspace tests run without a matrix change.
     name: test-workspace (${{ matrix.name }})
     # runs-on: ubicloud-standard-4
     runs-on: ubuntu-latest
     # Only browser tests need the image; other workspace tests use the host.
     container:
-      image: ${{ matrix.playwright && 'ghcr.io/chattocorp/media-e2e@sha256:9c1a946791d313bcfcf5638921932a6b0aef323b33b28a2a567667894e372bcb' || '' }}
+      image: ${{ matrix.playwright && 'ghcr.io/chattocorp/media-e2e@sha256:51b6faaf77532ea291a0840bc53200199722d048aa31cf7490d9278649957287' || '' }}
       options: --init --ipc=host
     defaults:
       run:
@@ -587,7 +707,7 @@ jobs:
       - name: Run workspace unit tests
         env:
           TURBO_FILTER: ${{ matrix.filter }}
-        run: pnpm turbo run test --concurrency=1 "--filter=$TURBO_FILTER"
+        run: pnpm turbo run test --concurrency=1 "--filter=$TURBO_FILTER" '--filter=!./experimental/*'
 
   test-workspace:
     needs: [changes, test-workspace-packages]
@@ -672,7 +792,7 @@ jobs:
         run: mise x -- node tools/dev-seed-smoke.mjs
 
       - name: Run Go tests
-        run: cd cli && go test -trimpath -tags test_endpoints ./...
+        run: cd cli && go test -trimpath -shuffle="${CHATTO_GO_TEST_SHUFFLE:-on}" -tags test_endpoints ./...
 
   lint-cli:
     needs: changes
@@ -777,7 +897,7 @@ jobs:
     if: ${{ needs.changes.outputs.authling == 'true' }}
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/chattocorp/media-e2e@sha256:9c1a946791d313bcfcf5638921932a6b0aef323b33b28a2a567667894e372bcb
+      image: ghcr.io/chattocorp/media-e2e@sha256:51b6faaf77532ea291a0840bc53200199722d048aa31cf7490d9278649957287
       options: --init --ipc=host
     defaults:
       run:
@@ -826,7 +946,7 @@ jobs:
     # runs-on: ubicloud-standard-4
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/chattocorp/media-e2e@sha256:9c1a946791d313bcfcf5638921932a6b0aef323b33b28a2a567667894e372bcb
+      image: ghcr.io/chattocorp/media-e2e@sha256:51b6faaf77532ea291a0840bc53200199722d048aa31cf7490d9278649957287
       options: --init --ipc=host
     defaults:
       run:
@@ -882,6 +1002,10 @@ jobs:
           path: apps/frontend/e2e-results.json
           retention-days: 14
 
+      - name: Report disk use after E2E
+        if: always()
+        run: bash "$GITHUB_WORKSPACE/tools/ci-disk-usage.sh"
+
       - name: Upload Playwright report
         uses: actions/upload-artifact@v7
         if: ${{ failure() }}
@@ -908,7 +1032,7 @@ jobs:
     runs-on: ubuntu-latest
     # Update this digest in a PR to verify a new image before changing main.
     container:
-      image: ghcr.io/chattocorp/media-e2e@sha256:9c1a946791d313bcfcf5638921932a6b0aef323b33b28a2a567667894e372bcb
+      image: ghcr.io/chattocorp/media-e2e@sha256:51b6faaf77532ea291a0840bc53200199722d048aa31cf7490d9278649957287
       options: --init --ipc=host
     defaults:
       run:
@@ -948,6 +1072,10 @@ jobs:
       - name: Run media E2E tests
         run: cd apps/frontend && pnpm exec playwright test --grep @ffmpeg
 
+      - name: Report disk use after media E2E
+        if: always()
+        run: bash "$GITHUB_WORKSPACE/tools/ci-disk-usage.sh"
+
       - name: Upload Playwright report
         uses: actions/upload-artifact@v7
         if: ${{ failure() }}
@@ -961,7 +1089,7 @@ jobs:
     if: ${{ needs.changes.outputs.chatto == 'true' }}
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/chattocorp/media-e2e@sha256:9c1a946791d313bcfcf5638921932a6b0aef323b33b28a2a567667894e372bcb
+      image: ghcr.io/chattocorp/media-e2e@sha256:51b6faaf77532ea291a0840bc53200199722d048aa31cf7490d9278649957287
       options: --init --ipc=host
     defaults:
       run:
@@ -999,6 +1127,10 @@ jobs:
       - name: Run large-server E2E performance test
         run: mise test-e2e-performance
 
+      - name: Report disk use after performance E2E
+        if: always()
+        run: bash "$GITHUB_WORKSPACE/tools/ci-disk-usage.sh"
+
       - name: Summarize performance results
         if: ${{ !cancelled() }}
         shell: bash
@@ -1032,13 +1164,15 @@ jobs:
           retention-days: 30
 
   publish-main-image:
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.chatto == 'true'
     needs:
+      - changes
       - build-main-image-contexts
       - license-check
       - workflow-lint
       - codegen-proto-drift
       - check-workspace
+      - check-unused
       - test-workspace
       - test-cli
       - test-e2e
@@ -1139,3 +1273,55 @@ jobs:
           install-cli-deps: 'false'
       - run: pnpm turbo run check --filter=docs-website
       - run: pnpm run build:docs
+
+  tag-releases:
+    # Optional product jobs may be skipped; failures and cancellations block tags.
+    if: ${{ always() && !cancelled() && github.event_name == 'push' && github.ref == 'refs/heads/main' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
+    needs:
+      - changes
+      - test-translatto-package
+      - test-runling
+      - test-botto
+      - test-chattobot
+      - build-main-image-contexts
+      - license-check
+      - workflow-lint
+      - desktop
+      - desktop-macos-capture
+      - codegen-proto-drift
+      - check-workspace
+      - check-unused
+      - check-format
+      - test-workspace-packages
+      - test-workspace
+      - test-cli-shared
+      - test-cli-chatto
+      - lint-cli
+      - test-oidc-conformance
+      - test-cli
+      - test-authling-e2e
+      - test-e2e-shards
+      - test-e2e
+      - test-e2e-media
+      - test-e2e-performance
+      - publish-main-image
+      - check-docs
+    runs-on: ubuntu-latest
+    concurrency:
+      group: sweet-tag-${{ github.sha }}
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PLEASE_PAT }}
+      - uses: jdx/mise-action@v3
+        with:
+          install: false
+      - name: Tag committed package releases
+        shell: bash
+        env:
+          PUSH_BEFORE: ${{ github.event.before }}
+          PUSH_AFTER: ${{ github.sha }}
+        run: bash tools/tag-releases.sh

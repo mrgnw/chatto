@@ -17,7 +17,7 @@ export class AdminPage {
 
   /** The sidebar navigation container (inside ServerSidebar component) */
   get sidebar(): Locator {
-    return this.page.locator('nav').first();
+    return this.page.getByTestId('server-sidebar');
   }
 
   /** The main content area (flex-1 div containing the page content) */
@@ -141,7 +141,7 @@ export class AdminPage {
    * Navigate to a specific role's page.
    */
   async gotoRole(roleName: string): Promise<void> {
-    await this.page.goto(routes.serverAdminPermission(roleName));
+    await this.page.goto(routes.serverAdminRole(roleName));
   }
 
   async navigateToGeneral(): Promise<void> {
@@ -161,7 +161,7 @@ export class AdminPage {
 
   async navigateToSettings(): Promise<void> {
     await this.settingsLink.click();
-    await this.page.waitForURL(routes.settingsAppearance);
+    await this.page.waitForURL(routes.settingsOverview);
   }
 
   async navigateBackToChat(): Promise<void> {

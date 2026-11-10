@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chattocorp/chatto/cli/internal/readmodel"
+
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 
 	"github.com/chattocorp/chatto/cli/internal/core/subjects"
@@ -17,8 +19,6 @@ import (
 )
 
 func TestUnknownPersistedDeliveryModeFailsClosedWithoutStallingMaterializer(t *testing.T) {
-	t.Parallel()
-
 	chattoCore, _ := setupTestCore(t)
 	ctx := testContext(t)
 	author, err := chattoCore.CreateUser(ctx, SystemActorID, "unknown-mode-author", "Unknown Mode Author", "password")
@@ -88,8 +88,6 @@ func TestUnknownPersistedDeliveryModeFailsClosedWithoutStallingMaterializer(t *t
 }
 
 func TestBadgeReactionAddsOnlyUnreadAttentionUntilRoomRead(t *testing.T) {
-	t.Parallel()
-
 	chattoCore, _ := setupTestCore(t)
 	ctx := testContext(t)
 	author, err := chattoCore.CreateUser(ctx, SystemActorID, "badge-reaction-author", "Badge Reaction Author", "password")
@@ -213,7 +211,7 @@ func TestBadgeReactionAddsOnlyUnreadAttentionUntilRoomRead(t *testing.T) {
 
 // badgeTestRoom creates a channel with an author and the given number of other
 // members. Members keep the default policy, where room messages are Badge.
-func badgeTestRoom(t *testing.T, chattoCore *ChattoCore, name string, members int) (*evtv1.User, *evtv1.Room, []*evtv1.User) {
+func badgeTestRoom(t *testing.T, chattoCore *ChattoCore, name string, members int) (*readmodel.User, *readmodel.Room, []*readmodel.User) {
 	t.Helper()
 	ctx := testContext(t)
 	author, err := chattoCore.CreateUser(ctx, SystemActorID, name+"-author", "Badge Author", "password")
@@ -227,7 +225,7 @@ func badgeTestRoom(t *testing.T, chattoCore *ChattoCore, name string, members in
 	if _, err := chattoCore.JoinRoom(ctx, author.Id, KindChannel, author.Id, room.Id); err != nil {
 		t.Fatal(err)
 	}
-	users := make([]*evtv1.User, 0, members)
+	users := make([]*readmodel.User, 0, members)
 	for index := range members {
 		user, err := chattoCore.CreateUser(ctx, SystemActorID, fmt.Sprintf("%s-member-%03d", name, index), "Badge Member", "password")
 		if err != nil {
@@ -242,8 +240,6 @@ func badgeTestRoom(t *testing.T, chattoCore *ChattoCore, name string, members in
 }
 
 func TestBadgeInvalidationOnlyWhenAttentionTurnsOn(t *testing.T) {
-	t.Parallel()
-
 	chattoCore, nc := setupTestCore(t)
 	ctx := testContext(t)
 	author, room, members := badgeTestRoom(t, chattoCore, "badge-transition", 1)
@@ -275,8 +271,6 @@ func TestBadgeInvalidationOnlyWhenAttentionTurnsOn(t *testing.T) {
 }
 
 func TestBadgeFanoutInvalidatesEveryRecipientOnce(t *testing.T) {
-	t.Parallel()
-
 	chattoCore, nc := setupTestCore(t)
 	ctx := testContext(t)
 	author, room, members := badgeTestRoom(t, chattoCore, "badge-fanout", 15)
@@ -314,8 +308,6 @@ func TestBadgeFanoutInvalidatesEveryRecipientOnce(t *testing.T) {
 }
 
 func TestBadgeAttentionEndsWhenRecipientAccountIsDeleted(t *testing.T) {
-	t.Parallel()
-
 	chattoCore, _ := setupTestCore(t)
 	ctx := testContext(t)
 	author, room, members := badgeTestRoom(t, chattoCore, "badge-delete", 1)
@@ -337,8 +329,6 @@ func TestBadgeAttentionEndsWhenRecipientAccountIsDeleted(t *testing.T) {
 }
 
 func TestExpiredBadgeSourceGivesNoAttention(t *testing.T) {
-	t.Parallel()
-
 	chattoCore, _ := setupTestCore(t)
 	ctx := testContext(t)
 	author, room, members := badgeTestRoom(t, chattoCore, "badge-expired", 1)
@@ -361,8 +351,6 @@ func TestExpiredBadgeSourceGivesNoAttention(t *testing.T) {
 }
 
 func TestBadgeThreadReplyRollsUpAndClearsAtThreadBoundary(t *testing.T) {
-	t.Parallel()
-
 	chattoCore, _ := setupTestCore(t)
 	ctx := testContext(t)
 	rootAuthor, err := chattoCore.CreateUser(ctx, SystemActorID, "badge-thread-root", "Badge Thread Root", "password")
@@ -420,8 +408,6 @@ func TestBadgeThreadReplyRollsUpAndClearsAtThreadBoundary(t *testing.T) {
 }
 
 func TestMessageMentionFactsRecomputeAfterOCCConflict(t *testing.T) {
-	t.Parallel()
-
 	chattoCore, _ := setupTestCore(t)
 	ctx := testContext(t)
 	author, err := chattoCore.CreateUser(ctx, SystemActorID, "notify-retry-author", "Notify Retry Author", "password")
@@ -478,9 +464,7 @@ func TestMessageMentionFactsRecomputeAfterOCCConflict(t *testing.T) {
 	}
 }
 
-func TestOneSourceFactProducesIndependentSignalsPerCause(t *testing.T) {
-	t.Parallel()
-
+func TestOneSourceFactProducesOneNotificationAcrossCauses(t *testing.T) {
 	chattoCore, _ := setupTestCore(t)
 	ctx := testContext(t)
 	author, err := chattoCore.CreateUser(ctx, SystemActorID, "signal-author", "Signal Author", "password")
@@ -515,28 +499,16 @@ func TestOneSourceFactProducesIndependentSignalsPerCause(t *testing.T) {
 		t.Fatal(err)
 	}
 	occurrences := testNotificationOccurrences(t, chattoCore, recipient.Id)
-	if len(occurrences) != 3 {
-		t.Fatalf("occurrences = %+v, want three exact signals", occurrences)
+	if len(occurrences) != 1 || occurrences[0].GetSourceEventId() != posted.GetId() || occurrences[0].GetRead() {
+		t.Fatalf("occurrences = %+v, want one unread occurrence for source", occurrences)
 	}
-	kinds := []notificationTestSignalKind{
-		notificationTestSignalKind(notificationSignalIdentity(occurrences[0].GetSignal())),
-		notificationTestSignalKind(notificationSignalIdentity(occurrences[1].GetSignal())),
-		notificationTestSignalKind(notificationSignalIdentity(occurrences[2].GetSignal())),
+	if count, err := chattoCore.NotificationOccurrences().UnreadCount(ctx, recipient.Id); err != nil || count != 1 {
+		t.Fatalf("UnreadCount = (%d, %v), want 1", count, err)
 	}
-	slices.Sort(kinds)
-	want := []notificationTestSignalKind{
-		notificationTestSignalAll,
-		notificationTestSignalDirectMention,
-		notificationTestSignalRoomMessage,
-	}
-	if !slices.Equal(kinds, want) || occurrences[0].GetSourceEventId() != posted.GetId() || occurrences[0].GetId() == occurrences[1].GetId() {
-		t.Fatalf("signal kinds/identities = (%v, %+v)", kinds, occurrences)
-	}
+
 }
 
 func TestRoomMessageOutputHonoursMessageReadVisibilityBoundaries(t *testing.T) {
-	t.Parallel()
-
 	for _, tc := range []struct {
 		name string
 		slug string
@@ -647,8 +619,6 @@ func TestRoomMessageOutputHonoursMessageReadVisibilityBoundaries(t *testing.T) {
 }
 
 func TestDirectMentionOccurrenceVisibleWithInteractionScopedRead(t *testing.T) {
-	t.Parallel()
-
 	chattoCore, _ := setupTestCore(t)
 	ctx := testContext(t)
 	author, err := chattoCore.CreateUser(ctx, SystemActorID, "interaction-notify-author", "Interaction Notify Author", "password")
@@ -746,8 +716,6 @@ func TestDirectMentionOccurrenceVisibleWithInteractionScopedRead(t *testing.T) {
 }
 
 func TestDirectMessagesRemainExactOccurrences(t *testing.T) {
-	t.Parallel()
-
 	chattoCore, _ := setupTestCore(t)
 	ctx := testContext(t)
 	alice, err := chattoCore.CreateUser(ctx, SystemActorID, "exact-dm-alice", "Exact DM Alice", "password")
@@ -780,8 +748,6 @@ func TestDirectMessagesRemainExactOccurrences(t *testing.T) {
 }
 
 func TestDMThreadReplyProducesOneFollowedThreadOccurrence(t *testing.T) {
-	t.Parallel()
-
 	chattoCore, _ := setupTestCore(t)
 	ctx := testContext(t)
 	alice, err := chattoCore.CreateUser(ctx, SystemActorID, "dm-thread-alice", "DM Thread Alice", "password")
@@ -816,8 +782,6 @@ func TestDMThreadReplyProducesOneFollowedThreadOccurrence(t *testing.T) {
 }
 
 func TestUserScopedVisibilityHintsOnlyTheUsersRooms(t *testing.T) {
-	t.Parallel()
-
 	chattoCore, nc := setupTestCore(t)
 	ctx := testContext(t)
 	outsider, err := chattoCore.CreateUser(ctx, SystemActorID, "badge-private-outsider", "Outsider", "password")
@@ -853,8 +817,6 @@ func TestUserScopedVisibilityHintsOnlyTheUsersRooms(t *testing.T) {
 }
 
 func TestRetractionHintsSkipFormerMembers(t *testing.T) {
-	t.Parallel()
-
 	chattoCore, nc := setupTestCore(t)
 	ctx := testContext(t)
 	author, room, members := badgeTestRoom(t, chattoCore, "badge-retract-former", 1)

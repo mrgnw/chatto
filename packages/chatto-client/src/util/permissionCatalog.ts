@@ -78,6 +78,10 @@ export const PERMISSION_DEFINITIONS: Readonly<Record<string, PermissionDefinitio
     scopes: ['server', 'group', 'room'],
     privileged: true
   },
+  'room.manage-notice': {
+    category: 'room',
+    scopes: ['server', 'group', 'room']
+  },
   'room.remove-member': {
     category: 'room',
     scopes: ['server', 'group', 'room'],
@@ -186,6 +190,10 @@ export const PERMISSION_DEFINITIONS: Readonly<Record<string, PermissionDefinitio
     scopes: ['server']
   },
   'user.invite': {
+    category: 'user',
+    scopes: ['server']
+  },
+  'user.manage-invites': {
     category: 'user',
     scopes: ['server'],
     privileged: true

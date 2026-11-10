@@ -17,8 +17,6 @@ import (
 )
 
 func TestNotificationOccurrenceLifecycleUsesStreamFacts(t *testing.T) {
-	t.Parallel()
-
 	// The alert worker consumes the signal concurrently. This recipient has no
 	// visible room, so the worker resolves the alert as undelivered before any
 	// handler runs. The returned occurrence is current projected state and can
@@ -113,8 +111,6 @@ func TestNotificationOccurrenceLifecycleUsesStreamFacts(t *testing.T) {
 }
 
 func TestNotificationIdentitySeparatesSignalKinds(t *testing.T) {
-	t.Parallel()
-
 	recipientID, sourceID := "U1", "E1"
 	mention := notificationOccurrenceID(recipientID, sourceID, "direct_mention_received")
 	reply := notificationOccurrenceID(recipientID, sourceID, "reply_received")
@@ -124,8 +120,6 @@ func TestNotificationIdentitySeparatesSignalKinds(t *testing.T) {
 }
 
 func TestNotificationCreationHintsReportEveryNewID(t *testing.T) {
-	t.Parallel()
-
 	chattoCore, nc := newTestCore(t)
 	startCoreServices(t, chattoCore)
 	ctx := testContext(t)
@@ -194,8 +188,6 @@ func TestNotificationCreationHintsReportEveryNewID(t *testing.T) {
 }
 
 func TestNotificationCreateManyCommitsFanoutAsOneBatch(t *testing.T) {
-	t.Parallel()
-
 	chattoCore, _ := newTestCore(t)
 	startCoreServices(t, chattoCore)
 	ctx := testContext(t)
@@ -230,8 +222,6 @@ func TestNotificationCreateManyCommitsFanoutAsOneBatch(t *testing.T) {
 }
 
 func TestNotificationCreateRetryReconcilesExistingOccurrenceWithReadBoundary(t *testing.T) {
-	t.Parallel()
-
 	chattoCore, _ := setupTestCore(t)
 	ctx := testContext(t)
 	poster, err := chattoCore.CreateUser(ctx, SystemActorID, "retry-read-poster", "Retry Read Poster", "password")
@@ -307,8 +297,6 @@ func TestNotificationCreateRetryReconcilesExistingOccurrenceWithReadBoundary(t *
 }
 
 func TestConcurrentNotificationRemovalCountsOneCommit(t *testing.T) {
-	t.Parallel()
-
 	chattoCore, _ := newTestCore(t)
 	startCoreServices(t, chattoCore)
 	ctx := testContext(t)
@@ -351,8 +339,6 @@ func TestConcurrentNotificationRemovalCountsOneCommit(t *testing.T) {
 }
 
 func TestNotificationProjectionExpiresOccurrencesAndTombstones(t *testing.T) {
-	t.Parallel()
-
 	p := NewNotificationProjection()
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	p.now = func() time.Time { return now }
@@ -415,8 +401,6 @@ func TestNotificationProjectionExpiresOccurrencesAndTombstones(t *testing.T) {
 }
 
 func TestNotificationProjectionColdReplayRetainsExpiredDismissalCleanupCoordinate(t *testing.T) {
-	t.Parallel()
-
 	p := NewNotificationProjection()
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	p.now = func() time.Time { return now }
@@ -443,8 +427,6 @@ func TestNotificationProjectionColdReplayRetainsExpiredDismissalCleanupCoordinat
 }
 
 func TestNotificationProjectionKeepsFirstAlertResolution(t *testing.T) {
-	t.Parallel()
-
 	p := NewNotificationProjection()
 	now := time.Now().UTC().Truncate(time.Millisecond)
 	p.now = func() time.Time { return now }
@@ -491,12 +473,58 @@ func notificationSignalledEvent(id string, occurrence *notificationv1.Notificati
 }
 
 func TestUnsupportedNotificationSignalDetection(t *testing.T) {
-	t.Parallel()
-
 	if !NotificationOccurrenceHasUnsupportedSignal(&notificationv1.NotificationOccurrence{Signal: testUnsupportedNotificationSignal()}) {
 		t.Fatal("future signal was not detected")
 	}
 	if NotificationOccurrenceHasUnsupportedSignal(&notificationv1.NotificationOccurrence{Signal: &notificationv1.NotificationSignal{}}) {
 		t.Fatal("empty signal was treated as an unknown future signal")
+	}
+}
+
+// A reply can match both reply and followed-thread policy. The source ID,
+// rather than the shared thread target, must control suppression.
+func TestNotificationFanoutGuardsReasonsButKeepsDistinctReplies(t *testing.T) {
+	c, _ := newTestCore(t)
+	startCoreServices(t, c)
+	ctx := testContext(t)
+	model := c.NotificationOccurrences()
+	input := CreateNotificationOccurrenceInput{
+		RecipientID: "U-dedupe", SourceEventID: "E-reply-1", SourceCreated: time.Now().UTC(), ActorID: "U-author",
+		Signal:         testNotificationSignal(notificationTestSignalReply, "R-room", "E-reply-1"),
+		Mode:           evtv1.NotificationDeliveryMode_NOTIFICATION_DELIVERY_MODE_IN_APP_NOTIFICATION,
+		AttentionLevel: notificationv1.NotificationAttentionLevel_NOTIFICATION_ATTENTION_LEVEL_IMPORTANT, SkipReadLookup: true,
+	}
+	notificationSignalMessage(input.Signal).ThreadRootEventId = new("E-root")
+	push := input
+	push.Signal = testNotificationSignal(notificationTestSignalFollowedThread, "R-room", "E-reply-1")
+	notificationSignalMessage(push.Signal).ThreadRootEventId = new("E-root")
+	push.Mode = evtv1.NotificationDeliveryMode_NOTIFICATION_DELIVERY_MODE_PUSH_NOTIFICATION
+	if err := model.CreateMany(ctx, []CreateNotificationOccurrenceInput{input, push}); err != nil {
+		t.Fatal(err)
+	}
+	occurrences, err := model.List(ctx, input.RecipientID)
+	if err != nil || len(occurrences) != 1 {
+		t.Fatalf("List = (%v, %v), want one", occurrences, err)
+	}
+	first := occurrences[0]
+	if first.GetRead() || first.GetAlertExpiresAt() == nil || !testOccurrenceHasKind(first, notificationTestSignalFollowedThread) {
+		t.Fatalf("occurrence = %+v, want unread with strongest delivery mode", first)
+	}
+	// A separate call with a different reason exercises the broker guard.
+	if _, created, err := model.Create(ctx, input); err != nil || created {
+		t.Fatalf("duplicate = (%v, %v)", created, err)
+	}
+	input.SourceEventID = "E-reply-2"
+	input.Signal = testNotificationSignal(notificationTestSignalReply, "R-room", input.SourceEventID)
+	notificationSignalMessage(input.Signal).ThreadRootEventId = new("E-root")
+	if _, created, err := model.Create(ctx, input); err != nil || !created {
+		t.Fatalf("distinct reply = (%v, %v)", created, err)
+	}
+	if count, err := model.UnreadCount(ctx, input.RecipientID); err != nil || count != 2 {
+		t.Fatalf("UnreadCount = (%d, %v), want 2", count, err)
+	}
+	stored, err := model.Get(ctx, first.GetRecipientId(), first.GetId())
+	if err != nil || stored.GetRead() {
+		t.Fatalf("original pending notification = (%v, %v)", stored, err)
 	}
 }

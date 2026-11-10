@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   app,
+  autoUpdater,
   BrowserWindow,
   clipboard,
   desktopCapturer,
@@ -13,13 +14,19 @@ import {
   MessageChannelMain,
   Menu,
   MenuItem,
+  nativeTheme,
   net,
+  Notification,
   protocol,
   session,
   shell
 } from 'electron';
-import { APP_ORIGIN, createFrontendProtocolHandler } from './frontend_protocol.mjs';
+import { createFrontendProtocolHandler } from './frontend_protocol.mjs';
 import { configureYouTubeEmbeds } from './youtube.mjs';
+import { protectReloadShortcuts } from './keyboard_shortcuts.mjs';
+import { configureNativeNavigation } from './native_navigation.mjs';
+import { configureMediaContextMenu } from './media_context_menu.mjs';
+import { configureLastServer } from './last_server.mjs';
 import {
   gameCaptureCancelListSourcesChannel,
   gameCaptureListSourcesChannel,
@@ -36,12 +43,19 @@ import packageJson from './package.json' with { type: 'json' };
 import { desktopBuildProfile } from './build_profile.mjs';
 import { StreamDiagnostics } from './stream_diagnostics.mjs';
 import { defaultScreenShareMode, screenShareModes } from './screen_share_modes.mjs';
+import { passwordLogin } from './password_login.mjs';
+import { configureUpdateMenu } from './update_menu.mjs';
+import { configureUpdateBridge } from './update_bridge.mjs';
+import { unavailableDesktopUpdates } from './updates.mjs';
+import { configureBackgroundWindow } from './background.mjs';
+import { configureDesktopNotifications } from './notifications.mjs';
+import { configureScreenSharing } from './screen_sharing.mjs';
 
 const buildProfile = desktopBuildProfile(packageJson.chattoBuildVariant);
-if (buildProfile.variant === 'development') {
-  app.setName(buildProfile.productName);
-  app.setPath('userData', path.join(app.getPath('appData'), buildProfile.productName));
-}
+app.setName(buildProfile.productName);
+// Match the Linux launcher on Wayland and X11, including direct tarball launches.
+if (process.platform === 'linux') app.setDesktopName(`${buildProfile.packageName}.desktop`);
+app.setPath('userData', path.join(app.getPath('appData'), buildProfile.userDataName));
 const streamDiagnostics = new StreamDiagnostics();
 let screenShareMode = defaultScreenShareMode;
 
@@ -53,9 +67,11 @@ const frontendRoot = app.isPackaged
   : path.resolve(desktopRoot, '../frontend/build');
 
 let mainWindow;
+let activeAuthorization;
 let activeGameCaptureSession;
 let activeGameCaptureSourceList;
 const gameCaptureSourceOffers = new MacOSGameCaptureSourceOffers();
+const authorizationChannel = 'chatto:authorization:authorize';
 const macOSCaptureProbeListFlag = '--chatto-macos-capture-probe-list';
 const macOSCapturePocFlag = '--chatto-macos-capture-poc';
 
@@ -117,21 +133,70 @@ async function start() {
   );
   configureSession(session.defaultSession);
   configureGameCaptureIPC();
+  ipcMain.handle('chatto:password-login', (event, request) => {
+    if (
+      !mainWindow ||
+      event.sender !== mainWindow.webContents ||
+      event.senderFrame !== mainWindow.webContents.mainFrame ||
+      !hasAppOrigin(event.senderFrame.url)
+    ) {
+      throw new Error('Password sign-in is available only to the Chatto renderer.');
+    }
+    return passwordLogin(request);
+  });
+  configureAuthorizationIPC();
   mainWindow = createMainWindow();
+  const background = configureBackgroundWindow({
+    app,
+    autoUpdater,
+    window: mainWindow
+  });
+  const notifications = configureDesktopNotifications({
+    ipcMain,
+    Notification,
+    getWindow: () => mainWindow,
+    open: background.open,
+    isTrusted: (event) =>
+      Boolean(
+        mainWindow &&
+        event.sender === mainWindow.webContents &&
+        event.senderFrame === mainWindow.webContents.mainFrame &&
+        hasAppOrigin(event.senderFrame.url)
+      )
+  });
+  mainWindow.webContents.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
+    if (isMainFrame && !isInPlace) notifications.clear();
+  });
+  mainWindow.webContents.on('render-process-gone', () => notifications.clear());
+  app.on('before-quit', () => notifications.clear());
   configureDiagnosticsMenu();
+  // Update setup errors must not prevent local startup or expose request URLs.
+  const updateController = configureUpdateMenu(packageJson).catch(() => {
+    console.error('Update setup failed.');
+    return unavailableDesktopUpdates(packageJson.version);
+  });
+  configureUpdateBridge({
+    ipcMain,
+    controller: updateController,
+    isTrusted: (event) =>
+      Boolean(
+        mainWindow &&
+        !mainWindow.isDestroyed() &&
+        event.sender === mainWindow.webContents &&
+        event.senderFrame === mainWindow.webContents.mainFrame &&
+        hasAppOrigin(event.senderFrame.url)
+      ),
+    send: (state) => {
+      if (mainWindow && !mainWindow.isDestroyed() && hasAppOrigin(mainWindow.webContents.getURL()))
+        mainWindow.webContents.send('chatto:updates:changed', state);
+    }
+  });
 
-  app.on('second-instance', () => {
-    if (!mainWindow) return;
-    if (mainWindow.isMinimized()) mainWindow.restore();
-    mainWindow.focus();
-  });
-  app.on('activate', () => {
-    if (BrowserWindow.getAllWindows().length === 0) mainWindow = createMainWindow();
-  });
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit();
   });
   app.on('before-quit', () => {
+    activeAuthorization?.kill();
     cancelActiveGameCaptureSourceList();
     stopActiveGameCaptureSession();
   });
@@ -400,7 +465,7 @@ function cancelActiveGameCaptureSourceList() {
 function macOSCaptureHelperExecutable() {
   return path.resolve(
     process.resourcesPath,
-    '../Helpers/Chatto Capture Helper.app/Contents/MacOS/chatto-macos-capture-probe'
+    '../Helpers/Chatto Helper.app/Contents/MacOS/chatto-macos-capture-probe'
   );
 }
 
@@ -431,12 +496,19 @@ async function runMacOSCaptureProbeList() {
 
 function createMainWindow() {
   const window = new BrowserWindow({
-    title: 'Chatto Desktop',
+    title: 'Chatto',
+    // Keep this name stable so Electron can restore this window across releases.
+    name: 'main-window',
+    windowStatePersistence: true,
     width: 1280,
     height: 820,
-    minWidth: 800,
+    minWidth: 480,
     minHeight: 600,
-    backgroundColor: '#111827',
+    show: false,
+    // Hide the Windows and Linux menu bars until the user presses Alt.
+    autoHideMenuBar: process.platform === 'linux' || process.platform === 'win32',
+    // Match the frontend's default loading colours before its first paint.
+    backgroundColor: nativeTheme.shouldUseDarkColors ? '#171717' : '#f3f4f6',
     // Let the app header share the title area with the native window buttons.
     ...(process.platform === 'darwin'
       ? { titleBarStyle: 'hiddenInset', titleBarOverlay: true }
@@ -445,7 +517,12 @@ function createMainWindow() {
     webPreferences: mainWindowWebPreferences()
   });
 
+  // The first page paint includes the user's saved theme and loading palette.
+  window.once('ready-to-show', () => window.show());
   protectNavigation(window);
+  protectReloadShortcuts(window.webContents, app.isPackaged);
+  configureNativeNavigation(window);
+  configureMediaContextMenu(window, Menu);
   window.on('closed', () => {
     if (mainWindow === window) {
       cancelActiveGameCaptureSourceList();
@@ -453,16 +530,71 @@ function createMainWindow() {
       mainWindow = undefined;
     }
   });
-  window.loadURL(APP_ORIGIN);
+  window.loadURL(
+    configureLastServer(window.webContents, path.join(app.getPath('userData'), 'last-server.json'))
+  );
   return window;
 }
 
 function mainWindowWebPreferences() {
   const preferences = secureWebPreferences();
-  if (isGameCaptureAvailable()) {
-    preferences.preload = path.join(desktopRoot, 'preload.cjs');
-  }
+  // Hidden windows still receive notifications and maintain authenticated connections.
+  preferences.backgroundThrottling = false;
+  preferences.preload = path.join(desktopRoot, 'preload.cjs');
+  preferences.additionalArguments = [
+    ...(isGameCaptureAvailable() ? ['--chatto-native-screen-share'] : []),
+    ...(isNativeAuthorizationAvailable() ? ['--chatto-native-authorization'] : [])
+  ];
   return preferences;
+}
+
+/**
+ * Sign in through the macOS system browser (FDR-034). The renderer sends the
+ * authorization URL and receives the callback URL; the helper accepts only the
+ * built-in desktop client, and the renderer validates the callback and keeps
+ * the OAuth state and PKCE verifier.
+ */
+function configureAuthorizationIPC() {
+  if (!isNativeAuthorizationAvailable()) return;
+
+  ipcMain.handle(authorizationChannel, (event, url) => {
+    if (
+      !mainWindow ||
+      event.sender !== mainWindow.webContents ||
+      event.senderFrame !== mainWindow.webContents.mainFrame ||
+      !hasAppOrigin(event.senderFrame.url)
+    ) {
+      throw new Error('Native sign-in is available only to the Chatto renderer.');
+    }
+    if (activeAuthorization) throw new Error('A sign-in attempt is already active.');
+    return runMacOSAuthorizationHelper(String(url));
+  });
+}
+
+function runMacOSAuthorizationHelper(url) {
+  return new Promise((resolve, reject) => {
+    const child = spawn(macOSCaptureHelperExecutable(), ['authorize'], {
+      stdio: ['pipe', 'pipe', 'ignore']
+    });
+    activeAuthorization = child;
+    let output = '';
+    child.stdout.setEncoding('utf8');
+    child.stdout.on('data', (chunk) => {
+      output += chunk;
+      if (output.length > 8 * 1024) child.kill();
+    });
+    child.stdin.once('error', () => child.kill());
+    child.once('error', (error) => {
+      activeAuthorization = undefined;
+      reject(error);
+    });
+    child.once('exit', (code) => {
+      activeAuthorization = undefined;
+      if (code === 0) resolve(output.trim());
+      else reject(new Error('Sign-in was cancelled or could not be completed.'));
+    });
+    child.stdin.end(`${url}\n`);
+  });
 }
 
 function configureGameCaptureIPC() {
@@ -658,15 +790,19 @@ function configureDiagnosticsMenu() {
         {
           label: 'Copy Screen Sharing Diagnostics',
           click: () => {
-            clipboard.writeText(
-              streamDiagnostics.report({
-                version: app.getVersion(),
-                electron: process.versions.electron,
-                platform: process.platform,
-                arch: process.arch,
-                variant: buildProfile.variant
-              })
-            );
+            void clipboard
+              .writeText(
+                streamDiagnostics.report({
+                  version: app.getVersion(),
+                  electron: process.versions.electron,
+                  platform: process.platform,
+                  arch: process.arch,
+                  variant: buildProfile.variant
+                })
+              )
+              .catch(() => {
+                dialog.showErrorBox('Copy failed', 'Could not copy screen sharing diagnostics.');
+              });
           }
         },
         { type: 'separator' },
@@ -695,6 +831,12 @@ function isGameCaptureAvailable() {
     app.isPackaged &&
     supportsMacOSGameCapture(process.getSystemVersion()) &&
     existsSync(macOSCaptureHelperExecutable())
+  );
+}
+
+function isNativeAuthorizationAvailable() {
+  return (
+    process.platform === 'darwin' && app.isPackaged && existsSync(macOSCaptureHelperExecutable())
   );
 }
 
@@ -741,34 +883,10 @@ function configureSession(appSession) {
   appSession.setPermissionRequestHandler((contents, permission, callback) => {
     callback(isDesktopPermissionAllowed(permission, contents.getURL()));
   });
-  appSession.setDisplayMediaRequestHandler(async (request, callback) => {
-    if (!hasAppOrigin(request.securityOrigin) || !request.userGesture) {
-      callback({});
-      return;
-    }
-
-    try {
-      const sources = await desktopCapturer.getSources({
-        types: ['screen', 'window']
-      });
-      if (sources.length === 0) {
-        callback({});
-        return;
-      }
-      const choice = await dialog.showMessageBox(mainWindow, {
-        type: 'question',
-        title: 'Share your screen',
-        message: 'Choose what Chatto may share',
-        buttons: [...sources.map((source) => source.name), 'Cancel'],
-        cancelId: sources.length,
-        defaultId: 0,
-        noLink: true
-      });
-      const source = sources[choice.response];
-      callback(source ? { video: source } : {});
-    } catch {
-      callback({});
-    }
+  configureScreenSharing(appSession, {
+    desktopCapturer,
+    dialog,
+    getMainWindow: () => mainWindow
   });
 }
 

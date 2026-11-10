@@ -1,7 +1,7 @@
 # FDR-018: Account Lifecycle
 
 **Status:** Active
-**Last reviewed:** 2026-10-12
+**Last reviewed:** 2026-10-27
 
 ## Overview
 
@@ -11,7 +11,8 @@ This FDR covers human accounts from registration through deletion: signup, email
 
 ### Registration
 
-- A human user starts registration with an email address. Chatto returns the same generic response whether the address is available or already claimed, so the registration endpoint does not disclose existing accounts.
+- On invite-only servers, a human user first supplies a single-use invitation code (FDR-036). The code is consumed only when account creation succeeds.
+- Direct registration starts with an email address. Chatto returns the same generic response whether the address is available or already claimed, so the registration endpoint does not disclose existing accounts.
 - Chatto sends a six-digit verification code to an available address. Verifying the code returns a short-lived completion token; it does not create an account.
 - The user then chooses a login and password. The login must pass uniqueness, format, and blocked-username checks, and the email is checked again in case it was claimed while the completion token was outstanding.
 - Successful completion creates the account with the email already verified. There is no partially registered or unverified account state in the direct-registration flow.
@@ -50,6 +51,33 @@ This FDR covers human accounts from registration through deletion: signup, email
 - Email removal is not available yet.
 - Email verification code issuance is recorded in the EVT audit log with a hashed email, expiry, and safe request metadata; the raw code is not recorded.
 
+### Account deactivation
+
+- An administrator with `admin.view-users` and `user.manage-accounts` can
+  deactivate another human account in the member's **Account** section, next
+  to account deletion. The confirmation names the account and explains that
+  access stops but data remains intact.
+- Deactivation blocks password and external-provider sign-in, invalidates
+  cookie and bearer sessions, and closes realtime connections. Password
+  resets do not reactivate an account. Existing call connections lose access
+  when the call service next checks participant permissions.
+- The profile, messages, files, room memberships, roles, login, email addresses,
+  and credentials remain stored. The login and email addresses remain claimed.
+  The public profile exposes the deactivation flag. The reason and administrator
+  identity remain private.
+- One-to-one DMs show a notice and disable new messages while the other account
+  is deactivated. History remains readable. User cards retain their usual
+  appearance. New-DM, mention, and invitation pickers omit
+  deactivated accounts. Reactivation restores these controls through realtime
+  status updates without a page reload.
+- A deactivated owner's bots cannot authenticate or exercise permissions.
+  Their data and credentials remain stored.
+- Reactivation permits new sign-ins. Old human sessions and pending sign-in
+  proofs remain invalid. Owned bots can use their retained credentials again.
+- Administrators cannot deactivate themselves or owner accounts. Bot lifecycle
+  controls remain in bot management. Repeating the current state has no effect.
+- The feature adds no external service or third-party connection.
+
 ### Account deletion
 
 - A human user requests their own deletion via Account Settings.
@@ -58,8 +86,8 @@ This FDR covers human accounts from registration through deletion: signup, email
   permission, the user cannot use a token that was created before revocation.
 - An administrator with `admin.view-users` and `user.delete-any` can delete
   another human member from the **Account** section of the member detail page
-  in Server Administration. The entry point links to a full-page confirmation
-  that states what deletion does. The administrator must type the member's
+  in Server Administration. A modal shows the member's user card and states
+  what deletion does. The administrator must type the member's
   login. Chatto does not request the administrator's password or require a
   fresh credential for this action. The admin page does not offer this action
   for the administrator's own account or for a bot. Self-deletion stays in Account Settings, and bots follow
@@ -81,7 +109,7 @@ This FDR covers human accounts from registration through deletion: signup, email
   deleted user, not as a self-DM. See FDR-007.
 - New durable user events store login, display name, and verified email as encrypted PII payloads. Projections retain those encrypted envelopes, decrypt login/email transiently to derive in-memory lookup digests and decrypt fields for reads, and remove user-owned lookup entries when the account is crypto-shredded.
 - The login is freed up for re-use.
-- Bots cannot request their own deletion. Their owner or a human user with `bot.manage` deletes them through `BotService`; deleting a human owner also deletes every bot they own. Those paths use the same durable deletion and crypto-shredding behavior described above.
+- Bots cannot use the human account-deletion flow. Their owner or a human or bot caller with `bot.manage` deletes them through `BotService`; deleting a human owner also deletes every bot they own. Those paths use the same durable deletion and crypto-shredding behavior described above.
 
 ## Design Decisions
 
@@ -171,6 +199,7 @@ refresh before email management continues.
 - Self: an authenticated human user can update their own profile (FDR-022),
   add verified emails, select a primary email, and delete their own account.
 - `user.delete-any` — admin permission to delete other users' accounts.
+- `user.manage-accounts` — deactivate or reactivate another human account.
 - `user.delete-self` — gates a human user's own-account deletion. Granted to `everyone` by default; operators can revoke it to lock down self-deletion. Bots cannot exercise it even if an allow appears in their direct permission matrix.
 
 ## Related
@@ -182,4 +211,5 @@ refresh before email management continues.
 
 ## Open Questions
 
-- Should "delete" be replaceable with "anonymize" (keep messages, scrub identity)? Today the choice is delete-and-shred or nothing. Operators occasionally want a middle ground for moderation purposes.
+- Should deletion also offer anonymization (keep messages, remove identity)?
+  Deactivation preserves both messages and identity.

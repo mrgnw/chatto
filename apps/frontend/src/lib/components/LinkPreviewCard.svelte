@@ -2,7 +2,7 @@
 @component
 
 Displays an OpenGraph link preview card with image, title, description, and site name.
-Recognized YouTube videos and social posts render rich embeds instead. Supports dismiss (composer) and delete (posted message) actions.
+Recognized YouTube and Vimeo videos and social posts render rich embeds instead. Supports dismiss (composer) and delete (posted message) actions.
 When `canDelete` is true, right-click / long-press opens a context menu with Open link, Copy URL, and Delete.
 
 **Props:**
@@ -18,7 +18,14 @@ When `canDelete` is true, right-click / long-press opens a context menu with Ope
   import type { LinkPreviewView } from '@chatto/client/timeline/linkPreviews';
   import { pushState } from '$app/navigation';
   import { m } from '$lib/i18n/messages';
-  import { ContextMenu, MenuItem, MenuSection, LoadingFog } from '$lib/ui';
+  import {
+    ContextMenu,
+    MenuItem,
+    MenuSection,
+    LoadingFog,
+    PreviewToolbar,
+    PreviewAction
+  } from '$lib/ui';
   import { toast } from '$lib/ui/toast';
   import {
     renderedLinkTarget,
@@ -26,6 +33,8 @@ When `canDelete` is true, right-click / long-press opens a context menu with Ope
     openRenderedLink
   } from '$lib/navigation/renderedLink';
   import YouTubeEmbed from './YouTubeEmbed.svelte';
+  import VimeoEmbed from './VimeoEmbed.svelte';
+  import { vimeoEmbedUrl } from './vimeoEmbed';
   import SocialPostEmbed from './SocialPostEmbed.svelte';
 
   let {
@@ -47,6 +56,7 @@ When `canDelete` is true, right-click / long-press opens a context menu with Ope
   } = $props();
 
   const isYouTube = $derived(preview.embedType === 'youtube' && Boolean(preview.embedId));
+  const vimeoUrl = $derived(vimeoEmbedUrl(preview.url));
   let contextMenuPos = $state<{ x: number; y: number } | null>(null);
   let settledImageUrl = $state<string | null>(null);
 
@@ -99,6 +109,15 @@ When `canDelete` is true, right-click / long-press opens a context menu with Ope
     onContextMenu={handleContextMenu}
     onDelete={canDelete ? openDeleteConfirmation : undefined}
   />
+{:else if vimeoUrl}
+  <VimeoEmbed
+    embedUrl={vimeoUrl}
+    title={preview.title}
+    {onDismiss}
+    {showDismiss}
+    onContextMenu={handleContextMenu}
+    onDelete={canDelete ? openDeleteConfirmation : undefined}
+  />
 {:else if preview.socialPost}
   <SocialPostEmbed
     url={preview.url}
@@ -109,74 +128,67 @@ When `canDelete` is true, right-click / long-press opens a context menu with Ope
     onDelete={canDelete ? openDeleteConfirmation : undefined}
   />
 {:else if preview.imageUrl || preview.title || preview.description || preview.siteName}
-  <a
-    {...renderedLinkTarget(preview.url)}
-    onclick={(event) => handleRenderedLinkClick(event, preview.url)}
-    onauxclick={(event) => handleRenderedLinkClick(event, preview.url)}
-    data-testid="link-preview-card"
-    class="group/preview relative embed-frame flex w-full max-w-md flex-col"
-    oncontextmenu={handleContextMenu}
-  >
-    {#if preview.imageUrl}
-      <div class="relative aspect-[1.91/1] w-full overflow-hidden rounded-sm">
-        {#if settledImageUrl !== preview.imageUrl}
-          <LoadingFog class="h-full w-full rounded-none" />
+  <div class="group/preview relative my-1.5 w-full max-w-md preview-frame">
+    <a
+      {...renderedLinkTarget(preview.url)}
+      onclick={(event) => handleRenderedLinkClick(event, preview.url)}
+      data-testid="link-preview-card"
+      class="flex flex-col"
+      oncontextmenu={handleContextMenu}
+    >
+      <div class="preview-content">
+        {#if preview.imageUrl}
+          <div class="relative aspect-[1.91/1] w-full overflow-hidden">
+            {#if settledImageUrl !== preview.imageUrl}
+              <LoadingFog class="h-full w-full rounded-none" />
+            {/if}
+            <img
+              src={preview.imageUrl}
+              alt=""
+              class="absolute inset-0 h-full w-full object-cover outline-none"
+              onload={(event) => {
+                (event.currentTarget as HTMLImageElement).style.visibility = '';
+                settledImageUrl = event.currentTarget.getAttribute('src');
+              }}
+              onerror={(e) => {
+                // Keep the image frame in the virtualized message row.
+                (e.currentTarget as HTMLImageElement).style.visibility = 'hidden';
+                settledImageUrl = e.currentTarget.getAttribute('src');
+              }}
+            />
+          </div>
         {/if}
-        <img
-          src={preview.imageUrl}
-          alt=""
-          class="absolute inset-0 h-full w-full object-cover"
-          onload={(event) => {
-            (event.currentTarget as HTMLImageElement).style.visibility = '';
-            settledImageUrl = event.currentTarget.getAttribute('src');
-          }}
-          onerror={(e) => {
-            // Keep the image frame in the virtualized message row.
-            (e.currentTarget as HTMLImageElement).style.visibility = 'hidden';
-            settledImageUrl = e.currentTarget.getAttribute('src');
-          }}
-        />
+        <div class="flex min-w-0 flex-col gap-0.5 px-3 pt-3 pb-2">
+          {#if preview.siteName}
+            <span class="text-xs tracking-wide text-muted uppercase">{preview.siteName}</span>
+          {/if}
+          {#if preview.title}
+            <span class="line-clamp-2 text-sm leading-snug font-medium">{preview.title}</span>
+          {/if}
+          {#if preview.description}
+            <span class="line-clamp-2 text-xs text-muted">{preview.description}</span>
+          {/if}
+        </div>
       </div>
+    </a>
+    {#if (showDismiss && onDismiss) || canDelete}
+      <PreviewToolbar>
+        {#if showDismiss && onDismiss}
+          <PreviewAction
+            label={m('preview.dismiss')}
+            icon="icon-[uil--times]"
+            onclick={onDismiss}
+          />
+        {:else}
+          <PreviewAction
+            label={m('preview.delete')}
+            icon="icon-[uil--trash-alt]"
+            onclick={openDeleteConfirmation}
+          />
+        {/if}
+      </PreviewToolbar>
     {/if}
-    <div class="flex min-w-0 flex-col gap-0.5 px-3 pt-3 pb-2">
-      {#if preview.siteName}
-        <span class="text-xs tracking-wide text-muted uppercase">{preview.siteName}</span>
-      {/if}
-      {#if preview.title}
-        <span class="line-clamp-2 text-sm leading-snug font-medium">{preview.title}</span>
-      {/if}
-      {#if preview.description}
-        <span class="line-clamp-2 text-xs text-muted">{preview.description}</span>
-      {/if}
-    </div>
-    {#if showDismiss && onDismiss}
-      <button
-        type="button"
-        onclick={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          onDismiss?.();
-        }}
-        class="embed-control-button"
-        aria-label={m('preview.dismiss')}
-      >
-        <span class="iconify icon-[uil--times] text-sm" aria-hidden="true"></span>
-      </button>
-    {:else if canDelete}
-      <button
-        type="button"
-        onclick={(e) => {
-          e.preventDefault();
-          e.stopPropagation();
-          openDeleteConfirmation();
-        }}
-        class="embed-control-button"
-        aria-label={m('preview.delete')}
-      >
-        <span class="iconify icon-[uil--times] text-sm" aria-hidden="true"></span>
-      </button>
-    {/if}
-  </a>
+  </div>
 {/if}
 
 <!-- Context menu (posted message mode only) -->

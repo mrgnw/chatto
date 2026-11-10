@@ -132,6 +132,19 @@ does not read the thread again for each change.
 
 Use `readThread` instead when you need one snapshot and no live updates.
 
+`rooms.members(roomId)` returns a member store without starting a directory
+scan. Call `store.loadRoomMembers(roomId)` when a consumer needs the full list;
+the server store defers this request until room access is known. Use
+`members.searchMembers(query)` for bounded suggestions without loading the full
+list. An empty query returns a bounded page of suggestions. Recovery refreshes
+only explicitly requested directories.
+
+For rendered mentions, call `members.retainMentions(handles)` and release the
+returned subscription when the content leaves the view. Read `mentionMembers`
+for current profiles. These shared, room-scoped lookups search only matching
+pages and do not request the full directory. Missing handles stay plain text.
+Access and membership changes discard cached matches and fence older reads.
+
 ### Readiness and failures
 
 - `ready()` rejects when the server rejects the key, when the server is
@@ -155,25 +168,56 @@ A server and a stateless `Api` have the same request helpers. Each
 request has a ten-second timeout and is not automatically retried; a failed write can
 still have reached the server.
 
-| Helper                                             | Does                                                      |
-| -------------------------------------------------- | --------------------------------------------------------- |
-| `getMessage({ roomId, messageId })`                | Reads one message                                         |
-| `createMessage(destination, body, { inReplyTo })`  | Sends one message; returns its `id`                       |
-| `prepareMessage(destination, body, { inReplyTo })` | Prepares one logical send for explicit retries            |
-| `postMessage(destination, body)`                   | Sends text of any length, in parts of 8000 code points    |
-| `reply(message, body)`                             | Posts in the message's thread with a reference to it      |
-| `readThread(location, { after, limit })`           | Reads a thread; `after` reads only newer messages         |
-| `readAttachment({ roomId, attachmentId }, opts)`   | Reads a file; `maxImageSize` resizes images on the server |
-| `refreshTyping(destination)`                       | Refreshes the typing indicator once                       |
-| `withTyping(destination, work)`                    | Shows the typing indicator while `work` runs              |
-| `addReaction({ roomId, messageId }, emoji)`        | Reacts to a message                                       |
-| `addressedMessage(event, { reasons })`             | Recognizes an event as a message to the viewer            |
+| Helper                                             | Does                                                                        |
+| -------------------------------------------------- | --------------------------------------------------------------------------- |
+| `getMessage({ roomId, messageId })`                | Reads one message, including attachment metadata without download addresses |
+| `createMessage(destination, body, { inReplyTo })`  | Sends one message; returns its `id`                                         |
+| `prepareMessage(destination, body, { inReplyTo })` | Prepares one logical send for explicit retries                              |
+| `postMessage(destination, body)`                   | Sends text of any length, in parts of 8000 code points                      |
+| `reply(message, body)`                             | Posts in the message's thread with a reference to it                        |
+| `readThread(location, { after, limit })`           | Reads a thread; `after` reads only newer messages                           |
+| `readAttachment({ roomId, attachmentId }, opts)`   | Reads a file; `maxImageSize` resizes images on the server                   |
+| `refreshTyping(destination)`                       | Refreshes the typing indicator once                                         |
+| `withTyping(destination, work)`                    | Shows the typing indicator while `work` runs                                |
+| `addReaction({ roomId, messageId }, emoji)`        | Reacts to a message                                                         |
+| `addressedMessage(event, { reasons })`             | Recognizes an event as a message to the viewer                              |
 
 Request helpers take `{ signal }` as their last argument. A prepared operation
 takes it in `send({ signal })`. `postMessage`, `reply`,
 and `ctx.reply` return the `ids` of the new messages. Other helpers are
 `conversationKey`, `replyDestination`, `withTyping` and `startTyping` for
 custom typing updates, and `createDeliveryTracker` for replay filters.
+
+For a final reply, await `withTyping(destination, work)` before posting the
+message. The helper stops its timer and waits for any pending refresh, with
+a two-second request timeout. This prevents a successful refresh from arriving
+after the message and restoring the typing indicator.
+
+Message bodies can contain emoji shortcodes, such as `Hello :wave:`. The
+server keeps this text. Clients choose how to display it. For custom renderers,
+`@chatto/client/messaging/emojiShortcodes` exports `resolveEmoji(name)` for
+case-sensitive built-in names and `emojiShortcodes(text)` for source ranges
+with Unicode or unknown results. Tags beside Unicode letters, numbers, combining
+marks, or underscores stay literal. `emojiShortcodeQuery(textBeforeCursor)`
+reads a partial name with the same opening boundary for autocomplete. Parse
+Markdown first and scan only prose; leave code and URLs unchanged. Custom emoji
+assets are not supported yet.
+
+Skin-tone shortcodes use Slack syntax: `:thumbsup::skin-tone-4:` displays as
+👍🏽. Tones range from 2 (light) to 6 (dark). Supported mixed-tone pairs use two
+numbers in one suffix, such as `:couple::skin-tone-2-6:`. Unsupported combinations
+stay literal. Reaction APIs take the same name without the surrounding colons.
+Older servers can reject these reaction names; no connection-floor increase is
+required. Existing names and Unicode message content remain unchanged.
+
+`emojiNameFromUnicode(emoji)` returns a stable reaction name for a selected
+Unicode emoji, including its tone. Unknown sequences return `undefined`.
+Use this helper for new selections; keep existing reaction names unchanged.
+
+`mise codegen-emoji` builds the client tone map, server map, and converter map
+(`tools/emoji-map.json`) from gemoji and the bundled Unicode Emoji 15.0 data.
+Converters should look up complete names in this map rather than append a
+modifier to a base glyph. The generated maps require no network calls at runtime.
 
 For a send that needs retry safety, retain the prepared operation:
 
@@ -263,6 +307,59 @@ const server = client.server(serverId);
 
 A process can have one client with device storage and one for the origin
 server.
+
+If a host fetches discovery before `registry.addServer`, pass that response as
+`serverInfo` in the third argument to avoid another startup request.
+`server.serverInfo.init()` shares an in-flight discovery request. After it
+settles, read `server.serverInfo.discovery` for the response, or `null` on
+failure. A later call makes a fresh request.
+
+### Native storage and browser sign-in
+
+Native hosts can pass `persistence: ServerRegistryPersistence` to `createClient`
+instead of `storage: 'device'`. This adapter restores server registrations and
+stores authentication separately. The latest authentication record overrides
+the combined catalogue snapshot; `null` is a cleared-session record. Writes
+must complete durably before returning. A failed write must throw or return
+`false` from `writeAuthentication`. Read-back must return the committed value.
+The host owns encryption, access control, and exclusive process access. Do not
+let two processes renew the same saved session without shared coordination.
+
+The SDK saves a refresh request ID before sending a renewal. On restart it
+reuses that ID, then saves and verifies the replacement credentials before
+returning the new access token. Renewal requests omit cookies and reject
+redirects. Keep all authentication fields, including the OAuth client ID and
+refresh request ID, in the durable record.
+
+`@chatto/client/auth/oauth` provides `createOAuthFlow`, `isOAuthCallback`, and
+`exchangeOAuthCode` for native hosts. Supply discovery's authorization URL, the
+host's public OAuth client ID, and a literal loopback HTTP callback URL
+or the built-in `chatto://desktop/servers/callback?mode=popup` callback. The
+host opens the returned authorization URL in the system browser and receives
+the callback. The helpers use S256 PKCE, transaction state, exact callback
+validation, an optional issuer check, and a bounded token exchange. Keep the
+flow and callback in memory. Never log their code or verifier. The host owns
+the loopback listener, cancellation, consent UI, and client metadata document.
+
+Pass returned credentials through `persistedBearerSession`, combine them with
+`emptyServerSession()`, and supply the session to `registry.addServer`.
+The SDK then owns renewal and realtime state.
+
+### Native password sign-in
+
+`passwordLogin(origin, { login, password }, { signal })` returns renewable human
+credentials on servers that permit direct password login. Native hosts supply
+their own secure password field. The request has a 15-second timeout and a
+64 KiB response limit. It omits cookies, rejects redirects, and accepts HTTPS
+or loopback HTTP origins without paths, queries, or fragments.
+
+Pass the credentials through `persistedBearerSession` from
+`@chatto/client/auth/bearerSession`, combine them with `emptyServerSession()`
+from `@chatto/client/server/sessions`, and supply that session to
+`client.registry.addServer(registration, session)`. The SDK then owns token
+renewal and realtime state. This function does not save passwords or sessions.
+Errors expose a status and a fixed message, never the server response body.
+Remote `signOutServer` requests also omit cookies and reject redirects.
 
 ### State of the host
 

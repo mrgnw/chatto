@@ -16,6 +16,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chattocorp/chatto/cli/internal/readmodel"
+
 	"connectrpc.com/connect"
 	"connectrpc.com/grpcreflect"
 	"github.com/chattocorp/chatto/cli/internal/authctx"
@@ -28,7 +30,6 @@ import (
 	"github.com/chattocorp/chatto/cli/internal/pb/chatto/api/v1/apiv1connect"
 	authv1 "github.com/chattocorp/chatto/cli/internal/pb/chatto/auth/v1"
 	"github.com/chattocorp/chatto/cli/internal/pb/chatto/auth/v1/authv1connect"
-	evtv1 "github.com/chattocorp/chatto/cli/internal/pb/chatto/core/evt/v1"
 	discoveryv1 "github.com/chattocorp/chatto/cli/internal/pb/chatto/discovery/v1"
 	"github.com/chattocorp/chatto/cli/internal/pb/chatto/discovery/v1/discoveryv1connect"
 	operatorv1 "github.com/chattocorp/chatto/cli/internal/pb/chatto/operator/v1"
@@ -679,7 +680,7 @@ func TestConnectReflection(t *testing.T) {
 		protoreflect.FullName(discoveryv1connect.ServerDiscoveryServiceName),
 		protoreflect.FullName(apiv1connect.RoomServiceName),
 		protoreflect.FullName(adminv1connect.AdminDiagnosticsServiceName),
-		protoreflect.FullName(adminv1connect.AdminInviteLinkServiceName),
+		protoreflect.FullName(adminv1connect.AdminInvitationCodeServiceName),
 	} {
 		if !nameSet[want] {
 			t.Fatalf("reflection services = %v, missing %s", names, want)
@@ -998,7 +999,7 @@ func TestAuthenticateConnectRequest(t *testing.T) {
 	})
 
 	t.Run("returns narrow Connect caller", func(t *testing.T) {
-		info, err := authenticateConnectRequest(authctx.WithUser(context.Background(), &evtv1.User{
+		info, err := authenticateConnectRequest(authctx.WithUser(context.Background(), &readmodel.User{
 			Id:          "user-123",
 			Login:       "should-not-leak",
 			DisplayName: "Should Not Leak",
@@ -1123,8 +1124,19 @@ func TestConnectBotAPIKeyAuthenticatesPublicAPIRequests(t *testing.T) {
 
 	listReq := connect.NewRequest(&apiv1.ListBotsRequest{})
 	listReq.Header().Set("Authorization", "Bearer "+apiKey)
-	if _, err := botClient.ListBots(ctx, listReq); connect.CodeOf(err) != connect.CodeFailedPrecondition {
-		t.Fatalf("ListBots with bot API key code = %v, want failed precondition", connect.CodeOf(err))
+	listed, err := botClient.ListBots(ctx, listReq)
+	if err != nil || len(listed.Msg.GetBots()) != 0 {
+		t.Fatalf("ungranted bot ListBots: err=%v, want empty list", err)
+	}
+	if err := s.core.GrantUserPermission(ctx, core.SystemActorID, owner.GetId(), core.PermBotManage); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.core.SetUserPermissionState(ctx, owner.GetId(), bot.GetId(), core.PermissionTargetScope{Kind: core.MatrixScopeServer}, core.PermBotManage, core.PermissionStateAllow); err != nil {
+		t.Fatal(err)
+	}
+	listed, err = botClient.ListBots(ctx, listReq)
+	if err != nil || len(listed.Msg.GetBots()) != 1 {
+		t.Fatalf("granted bot ListBots: err=%v, want one bot", err)
 	}
 
 	createKeyReq := connect.NewRequest(&apiv1.CreateBotApiKeyRequest{BotUserId: bot.GetId(), Name: "Replacement"})
@@ -1259,7 +1271,7 @@ func TestConnectAPIReportsCredentialUserLookupFailureAsUnavailable(t *testing.T)
 		return err
 	}
 
-	s.credentialUserLookup = func(context.Context, string) (*evtv1.User, error) {
+	s.credentialUserLookup = func(context.Context, string) (*readmodel.User, error) {
 		return nil, errors.New("key store unavailable")
 	}
 	if err := getViewer(); connect.CodeOf(err) != connect.CodeUnavailable {

@@ -197,6 +197,49 @@ IDs and timestamps change. Each run adds data. A failed run can leave partial
 data. Add `--json` to get the generated IDs and text, or `--help` for options.
 Seeding is available only in development and test builds.
 
+To download face avatars automatically, opt in to Pravatar:
+
+```sh
+mise seed -- --seed 42 --users 20 --rooms 1 --messages 100 --thread-replies 99 --pravatar
+```
+
+The CLI downloads up to 20 portraits from `https://i.pravatar.cc`, then stores
+them as normal Chatto avatars. Larger datasets cycle through this pool. Requests
+use stable keys based on the seed and image index; the provider can change its
+images. Pravatar receives your IP address and these synthetic keys, but no
+account names, credentials, or Chatto server data. Viewing the avatars contacts
+only your Chatto server. Downloads are bounded and must succeed before any seed
+data is created. The command does not retry failed downloads automatically.
+
+For an offline source, place JPEG, PNG, or WebP portraits in a
+local directory and add `--avatar-dir`:
+
+```sh
+mise seed -- --seed 42 --users 20 --rooms 1 --messages 100 --thread-replies 99 --avatar-dir "$PWD/.context/avatars" --json
+```
+
+The CLI converts images to avatar size, reads them in filename order, and cycles
+through them across users. Use up to 50 files, each within the normal 25 MiB image
+upload limit. The converted pool must fit within 512 KiB. Images are stored by
+Chatto; neither seeding nor viewing the avatars contacts an external image
+provider. Obtain images separately from a source you can use. The example above
+creates one root message with 99 replies for a populated thread preview.
+`--avatar-dir` and `--pravatar` cannot be combined. Without either option,
+seeding creates no avatars and makes no requests to an image provider.
+
+To populate an existing account's notification page across several days:
+
+```sh
+mise seed -- --seed 42 --users 6 --rooms 3 --messages 0 \
+  --notification-recipient alice --notifications 40 --notification-days 5
+```
+
+This adds mentions, replies, and reactions with historical message targets.
+One quarter start as read. The recipient joins the generated rooms and follows
+the generated reply threads. These additional messages are separate from the
+`--messages` count. Notification fixtures use in-app delivery, without Web Push.
+The recipient login must exist. Restart `mise dev` after changes to the seeder.
+
 ## Local Development with Conductor
 
 [Conductor](https://conductor.build) runs the root `mise` tasks as native
@@ -336,11 +379,10 @@ even when the stable hostnames differ.
 Run `mise test-dev-tooling` to check environment defaults, disabled NATS
 listeners, cleanup after failure, route ownership, and real Traefik routing.
 The routing test checks that changes to another route preserve a WebSocket,
-that proxy restarts restore routes, and that unknown or removed hosts return
-404. The lifecycle test runs the real mise task graph with test listeners. It
+that proxy restarts restore routes, and that unknown or removed hosts return 404. The lifecycle test runs the real mise task graph with test listeners. It
 checks that one stop closes all listeners and removes routes and runtime state
-within Paseo's shutdown deadline. This task also runs in CI and as part of
-`mise test`.
+within Paseo's shutdown deadline. These tests also run through
+`mise test-repo-tooling` in CI and as part of `mise test`.
 
 Private configuration is in `.context/paseo-stack/<dev-full-port>/` and is
 removed on normal stop. Each service receives its own current port from Paseo;
@@ -411,6 +453,29 @@ Prettier uses the nearest configuration file. The frontend keeps its Svelte and
 Tailwind plugin settings in `apps/frontend/.prettierrc`. Authling uses its own
 pnpm workspace and toolchain.
 
+Pull requests check formatting only in files changed since the merge base with
+the target branch. To run the same check locally, use:
+
+```sh
+mise x -- pnpm format:changed
+mise x -- pnpm format:changed -- origin/release-0.5
+```
+
+The default base is `origin/main`. Fetch the base branch first. The local check
+includes staged and unstaged changes to tracked files; stage new files to include
+them. It uses the nearest Prettier configuration and the root `.prettierignore`.
+Deleted files, symlinks, and file types that Prettier does not support are skipped.
+The check does not change files. A formatting-configuration change does not cause
+a full-repository check.
+
+To check for unused files, dependencies, and duplicate exports in the root pnpm
+workspace, run `mise knip`. CI runs the same check. `knip.jsonc` records entry
+points that tools load by path and explains exceptions for external commands
+and dynamic dependencies. Check references before removing a reported file.
+Unused export and type checks remain disabled because libraries expose APIs
+to consumers outside this repository. Authling has a separate workspace and
+is not included in this check.
+
 `mise dev` and `mise dev-full` use Conductor's allocated port block and fall
 back to base port `4000` outside Conductor. Paseo's **dev** service overrides
 Chatto's port and public URL and disables the NATS TCP listener, as described
@@ -422,6 +487,21 @@ Pass explicit CLI arguments after the task name, for example
 `mise chatto version`.
 
 ### Local Chatto Data
+
+Stop development servers and builds before running `mise clean`. It removes
+Chatto binaries, release output, embedded frontend copies, frontend and Storybook
+builds, E2E binaries, docs output, mobile web copies, and the root workspace
+packages' build output. It also removes generated SvelteKit and Astro state
+and the frontend build-completion marker. The next build recreates these files
+or restores them from the build cache.
+
+The task preserves development data, backups, environment files, generated
+source committed to Git, test reports, dependency and Turbo caches, and native
+Swift/Xcode build caches. It preserves the rest of `.context/`, including mobile
+native builds.
+Authling is separate: run `mise clean` from `authling/` to remove its binaries,
+browser assets, and generated E2E files. Neither clean task resets application
+data.
 
 `cli/chatto.toml` is the development configuration of `mise dev`,
 `mise dev-full`, and `mise chatto`. The `chatto` task sets the values that
@@ -458,6 +538,45 @@ only while the Runling bot of `mise dev-full` runs.
 | `bob`   | `bob@example.com`   | `foobar123` | user  |
 
 Use `alice` when you need server administration access.
+
+## CI Job Selection
+
+CI selects product jobs from the changed paths. Pull requests use the complete
+PR diff; pushes use the exact before and after commits.
+
+- Sweet notes in any `.sweet/` directory and generated `CHANGELOG.md` files
+  do not select product jobs or Authling image builds. Release preparation
+  still runs for Sweet notes on `main`.
+- Ordinary frontend source, translations, and tests select Chatto checks,
+  including the frontend build and browser tests, without native desktop
+  packaging.
+- Desktop shell files, the frontend desktop bridge, frontend build settings,
+  scripts and static assets, shared client packages, protobufs, and desktop
+  test scripts select the full desktop platform matrix.
+- Shared build and dependency configuration selects all products. Release
+  version files and package manifests still select their product checks.
+- Workflow/tooling checks, license checks, and PR formatting checks run
+  independently of product selection.
+
+When you change these filters, run `mise lint-actions` and inspect the
+**Select affected products** step in CI to confirm which paths selected jobs.
+
+## Repository Tooling Tests
+
+Run `mise test-repo-tooling` to test repository checks, release policy,
+build-output cleanup, development launchers, interchange schemas, and Slack
+import tooling. The task installs workspace dependencies and discovers
+`tools/*.test.mjs` files automatically. It runs Node test files one at a time,
+then runs the launcher shell test and the Python suites through
+`mise test-interchange` and `mise test-slack`.
+
+Slack scripts, tests, documentation, and Slack-specific assets are in
+`tools/slack/`. The Slack task also checks converted Markdown with the
+frontend's Markdown engine and link policy.
+
+CI and `mise test` use this same task. Add new Node tooling tests as
+`tools/<name>.test.mjs` so both commands include them. The focused tasks, such
+as `mise test-dev-tooling` and `mise test-clean`, remain available.
 
 ## Synthetic Test Data
 
@@ -514,3 +633,67 @@ The inactive-server notification tests advance the browser clock past the
 background poll interval. They wait for real projection catch-up and socket
 closure before and after the advance. Keep server requests and message delivery
 real when adding tests that control browser time.
+
+## Release notes
+
+Releasable packages use Sweet Release. Add a change note in each affected
+release unit with user-visible changes:
+
+```sh
+mise x -- sweet change .                   # Chatto, including client and desktop
+mise x -- sweet change packages/runling
+mise x -- sweet change authling
+```
+
+Choose `fix` for a patch release, `feature` for a minor release, or `breaking`
+for a breaking change. While these packages are below 1.0, breaking changes use
+a minor release. Describe the changed behavior and any required action. Commit
+the package's `.sweet/*.md` file with the change. Internal changes do not need
+a release note. Commit titles do not supply release notes.
+
+Changes to Sweet notes, manifests, repository configuration, or the preparation
+workflow on `main` create or update one release PR per package. Run the Prepare
+releases workflow manually to refresh a PR after unrelated changes or retry a
+failure. Correct release content on `main`; generated PR edits can be replaced.
+
+After all selected CI checks pass, CI tags each release commit in the full push
+range. Existing artifact workflows publish from those tags. The migration
+manifests record existing versions without creating replacement tags.
+
+Inspect pending notes with `mise x -- sweet status`. In a clean checkout, run
+`mise x -- sweet bump <package-path>` to preview a release and inspect the diff.
+This changes files but does not commit or publish them. See
+[the release guide](docs/RELEASING.md) for tag names, publication, and limits.
+
+### Writing change notes
+
+Write each Sweet note as a changelog entry for the affected reader: a member,
+administrator, operator, or integration author.
+
+- Describe what the reader will notice after the upgrade. Use “Reply now opens
+  the existing thread” rather than an implementation instruction such as
+  “Route replies into threads”.
+- For a fix, name the problem the reader experienced. For example: “Fixed
+  thread suggestions pointing to old conversations while browsing history.”
+- Use one note per meaningful change, usually one or two short sentences.
+  Group supporting changes, such as a button label, with the behavior they
+  support when that detail is useful.
+- If a change amends an existing unreleased note in the same release unit,
+  you can update that note or combine the notes and remove duplicates. Describe
+  the final behavior. Preserve required upgrade actions and the release type
+  needed for the combined change. Do not rewrite published release notes.
+- Include conditions only when readers need them to understand the change.
+  Always state required upgrade actions.
+- Keep implementation details, test results, and exhaustive exceptions in the
+  PR or decision record.
+- Describe the final behavior. Do not list each correction made while the
+  feature was developed.
+
+For example:
+
+> When the latest room message has a thread, Chatto now asks whether you want
+> to continue it or start a new conversation. Replies to a specific message
+> keep their chosen destination.
+
+Before you commit a note, ask: “Does this help the reader understand what
+changed for them after upgrading?” Shorten or omit text that does not.

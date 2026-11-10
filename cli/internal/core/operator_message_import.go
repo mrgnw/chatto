@@ -36,6 +36,11 @@ type HistoricalMessageInput struct {
 	IdempotencyKey string
 	// Deleted imports a native tombstone without storing any message body.
 	Deleted bool
+	// OperationKey provides permanent exact retry protection, independently of archives.
+	OperationKey string
+	// DeletedAt and SourceActorID preserve optional source metadata for keyed imports.
+	DeletedAt     *time.Time
+	SourceActorID string
 }
 
 const messageImportClaimPrefix = "message_import."
@@ -43,6 +48,17 @@ const messageImportClaimPrefix = "message_import."
 // claimHistoricalMessage uses the shared send reservation without granting
 // interactive posting privileges to the historical author.
 func (c *ChattoCore) claimHistoricalMessage(ctx context.Context, input HistoricalMessageInput, authorize func(context.Context) error) (*messagePostClaim, error) {
+	if input.OperationKey != "" {
+		op, err := c.operatorOperation(ctx, input.OperationKey, "ImportMessage", input)
+		if err != nil {
+			return nil, err
+		}
+		id := op.resource
+		if id == "" {
+			id = NewEventID()
+		}
+		return &messagePostClaim{messageID: id, operation: op}, nil
+	}
 	if input.IdempotencyKey == "" {
 		return nil, nil
 	}
@@ -88,6 +104,22 @@ func (c *ChattoCore) claimHistoricalMessage(ctx context.Context, input Historica
 // Operator access is root-equivalent; a committed result survives retraction
 // and archival without rechecking interactive read or posting permissions.
 func (c *ChattoCore) lookupHistoricalMessage(ctx context.Context, input HistoricalMessageInput, claim *messagePostClaim) error {
+	if claim.operation != nil {
+		if err := claim.operation.load(ctx); err != nil {
+			return err
+		}
+		if claim.operation.resource == "" {
+			return nil
+		}
+		claim.messageID = claim.operation.resource
+		position, err := c.EventPublisher.LastSubjectPosition(ctx, evtstream.RoomAggregate(input.RoomID).AllEventsFilter())
+		if err != nil {
+			return err
+		}
+		if err = c.roomModel.waitForDirectoryAndTimeline(ctx, position); err != nil {
+			return err
+		}
+	}
 	entry, exists := c.roomModel.timelineEntry(claim.messageID)
 	if !exists {
 		return nil
@@ -117,48 +149,70 @@ func (c *ChattoCore) readHistoricalClaim(ctx context.Context, input HistoricalMe
 	return c.lookupHistoricalMessage(ctx, input, claim)
 }
 
-// ImportHistoricalMessage appends a source-time message without user posting
-// policy or live posting effects. EVT records the system actor, while the
-// message fact and encrypted body retain the mapped historical author.
-func (c *ChattoCore) ImportHistoricalMessage(ctx context.Context, input HistoricalMessageInput) (result *evtv1.Event, resultErr error) {
+// validateHistoricalMessageInput checks immutable input before claims or writes.
+func validateHistoricalMessageInput(input HistoricalMessageInput) error {
+	if (input.DeletedAt != nil || input.SourceActorID != "") && input.OperationKey == "" {
+		return invalidArgument("source metadata requires operation_key")
+	}
+	if input.DeletedAt != nil && (!input.Deleted || input.DeletedAt.Before(input.CreatedAt) || timestamppb.New(*input.DeletedAt).CheckValid() != nil) {
+		return invalidArgument("invalid deleted_at")
+	}
+	if input.OperationKey != "" && input.IdempotencyKey != "" {
+		return invalidArgument("operation_key and idempotency_key are mutually exclusive")
+	}
 	if input.Deleted && (input.Body != "" || len(input.AttachmentAssetIDs) != 0 || input.LinkPreview != nil || input.EditedAt != nil) {
-		return nil, invalidArgument("deleted imports must not contain body, attachments, preview, or edited_at")
+		return invalidArgument("deleted imports must not contain body, attachments, preview, or edited_at")
 	}
 	if input.IdempotencyKey != "" {
 		if _, err := messageClaimKey(messageImportClaimPrefix, SystemActorID, input.IdempotencyKey); err != nil {
-			return nil, err
+			return err
 		}
 	}
 	if input.RoomID == "" || input.AuthorID == "" || input.CreatedAt.IsZero() {
-		return nil, invalidArgument("room_id, author_id, and created_at are required")
+		return invalidArgument("room_id, author_id, and created_at are required")
 	}
 	if input.CreateThread && input.ThreadRootEventID != "" {
-		return nil, invalidArgument("create_thread and thread_root_event_id are mutually exclusive")
+		return invalidArgument("create_thread and thread_root_event_id are mutually exclusive")
 	}
 	if err := timestamppb.New(input.CreatedAt).CheckValid(); err != nil {
-		return nil, invalidArgument("created_at is invalid")
+		return invalidArgument("created_at is invalid")
 	}
 	if input.EditedAt != nil {
 		if input.EditedAt.Before(input.CreatedAt) || timestamppb.New(*input.EditedAt).CheckValid() != nil {
-			return nil, invalidArgument("edited_at must be valid and no earlier than created_at")
+			return invalidArgument("edited_at must be valid and no earlier than created_at")
 		}
 	}
 	if err := validateMessageAttachmentAssetIDs(input.AttachmentAssetIDs); err != nil {
-		return nil, err
+		return err
 	}
 	if len(input.Body) > MaxMessageBodyLength {
-		return nil, ErrMessageTooLong
+		return ErrMessageTooLong
 	}
 	if !input.Deleted && !HasVisibleContent(input.Body) && len(input.AttachmentAssetIDs) == 0 {
-		return nil, invalidArgument("message must have either body or attachments")
+		return invalidArgument("message must have either body or attachments")
 	}
 	if err := validateLinkPreview(input.LinkPreview); err != nil {
-		return nil, err
+		return err
 	}
 	if input.LinkPreview != nil {
 		parsed, err := url.Parse(input.LinkPreview.GetUrl())
 		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
-			return nil, invalidArgument("preview_url must be an HTTP or HTTPS URL with a host")
+			return invalidArgument("preview_url must be an HTTP or HTTPS URL with a host")
+		}
+	}
+	return nil
+}
+
+// ImportHistoricalMessage appends a source-time message without user posting
+// policy or live posting effects. EVT records the system actor, while the
+// message fact and encrypted body retain the mapped historical author.
+func (c *ChattoCore) ImportHistoricalMessage(ctx context.Context, input HistoricalMessageInput) (result *evtv1.Event, resultErr error) {
+	if err := validateHistoricalMessageInput(input); err != nil {
+		return nil, err
+	}
+	if input.SourceActorID != "" {
+		if _, err := c.GetUser(ctx, input.SourceActorID); err != nil {
+			return nil, err
 		}
 	}
 	if _, err := c.GetUser(ctx, input.AuthorID); err != nil {
@@ -172,7 +226,7 @@ func (c *ChattoCore) ImportHistoricalMessage(ctx context.Context, input Historic
 		if err != nil {
 			return err
 		}
-		if room.Archived {
+		if room.Archived && input.OperationKey == "" {
 			return ErrRoomArchived
 		}
 		if input.ThreadRootEventID != "" {
@@ -202,7 +256,11 @@ func (c *ChattoCore) ImportHistoricalMessage(ctx context.Context, input Historic
 	}
 	if claim != nil {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithDeadline(ctx, claim.expiresAt)
+		if claim.expiresAt.IsZero() {
+			ctx, cancel = context.WithCancel(ctx)
+		} else {
+			ctx, cancel = context.WithDeadline(ctx, claim.expiresAt)
+		}
 		defer cancel()
 		if err := c.readHistoricalClaim(ctx, input, claim); err != nil {
 			return nil, err
@@ -269,6 +327,13 @@ func (c *ChattoCore) ImportHistoricalMessage(ctx context.Context, input Historic
 			RoomId: input.RoomID, InReplyTo: input.InReplyTo, InThread: input.ThreadRootEventID, AuthorId: input.AuthorID, HistoricalImport: true,
 		}},
 	})
+	if input.OperationKey != "" {
+		postedEvent.ImportContext = &evtv1.ImportContext{}
+		if input.SourceActorID != "" {
+			postedEvent.ImportContext.SourceActorId = &input.SourceActorID
+		}
+		bodyEvent.ImportContext = &evtv1.ImportContext{}
+	}
 	attachedEvents := make([]*evtv1.Event, 0, len(assetIDs))
 	processingEvents := make([]*evtv1.Event, 0, len(assetIDs))
 	for _, assetID := range assetIDs {
@@ -332,6 +397,17 @@ func (c *ChattoCore) appendHistoricalTombstone(ctx context.Context, input Histor
 	retracted := newEvent(SystemActorID, &evtv1.Event{Event: &evtv1.Event_MessageRetracted{
 		MessageRetracted: &evtv1.MessageRetractedEvent{RoomId: input.RoomID, EventId: messageID},
 	}})
+	if input.OperationKey != "" {
+		posted.ImportContext = &evtv1.ImportContext{}
+		retracted.ImportContext = &evtv1.ImportContext{HiddenTimeline: true, UnknownTime: input.DeletedAt == nil}
+		if input.DeletedAt != nil {
+			retracted.CreatedAt = timestamppb.New(*input.DeletedAt)
+		}
+		if input.SourceActorID != "" {
+			posted.ImportContext.SourceActorId = &input.SourceActorID
+			retracted.ImportContext.SourceActorId = &input.SourceActorID
+		}
+	}
 	rootID := input.ThreadRootEventID
 	if input.CreateThread {
 		rootID = messageID
@@ -365,9 +441,11 @@ func (c *ChattoCore) appendHistoricalTombstone(ctx context.Context, input Histor
 		}
 		entries = append(entries, evtstream.BatchEntry{Subject: agg.SubjectFor(retracted), Event: retracted})
 		entries[0].Expect = events.ExpectFilterSeq(guard.roomFilter, guard.roomSeq)
+		retractionIndex := len(entries) - 1
+		entries = appendOperatorReceipt(entries, claim)
 		seqs, err := c.EventPublisher.AppendBatch(ctx, entries)
 		if err == nil {
-			position := events.SubjectPosition(agg.SubjectFor(retracted), seqs[len(seqs)-1])
+			position := events.SubjectPosition(agg.SubjectFor(retracted), seqs[retractionIndex])
 			if err := c.roomModel.waitForTimeline(ctx, position); err != nil {
 				return nil, err
 			}

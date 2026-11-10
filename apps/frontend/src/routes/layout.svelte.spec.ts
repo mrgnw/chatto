@@ -1,4 +1,5 @@
 import { tick } from 'svelte';
+import { page as browserPage } from 'vitest/browser';
 import { page } from '$app/state';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-svelte';
@@ -16,8 +17,10 @@ const { mocks } = vi.hoisted(() => ({
     onNavigate: vi.fn(),
     deactivateManagementLocaleMessages: vi.fn(async () => {}),
     appUi: {
+      isRoomCallWide: false,
       setActiveRoomScope: vi.fn(),
-      setActiveServer: vi.fn()
+      setActiveServer: vi.fn(),
+      loadVisibleRoomMembers: vi.fn()
     },
     originClient: {
       showConnectionLostIcon: false,
@@ -130,10 +133,21 @@ vi.mock('$lib/state/activeServer.svelte', () => ({
   getActiveServer: () => 'origin'
 }));
 
-vi.mock('$lib/state/appUi.svelte', () => ({
-  getAppUiState: () => mocks.appUi,
-  provideAppUiState: () => mocks.appUi
-}));
+vi.mock('$lib/state/appUi.svelte', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('$lib/state/appUi.svelte')>();
+  const { fromStore, writable } = await import('svelte/store');
+  const wide = fromStore(writable(false));
+  Object.defineProperty(mocks.appUi, 'isRoomCallWide', {
+    get: () => wide.current,
+    set: (value: boolean) => (wide.current = value)
+  });
+  return {
+    ...actual,
+    AppUiState: class {},
+    getAppUiState: () => mocks.appUi,
+    provideAppUiState: () => mocks.appUi
+  };
+});
 
 vi.mock('$lib/state/server/useServerRegistry.svelte', () => ({
   useServerRegistry: vi.fn()
@@ -199,6 +213,54 @@ function touch(type: string, x: number, y = 120) {
     changedTouches: [contact]
   });
 }
+
+describe('main-view navigation fade', () => {
+  it('fades channel and page changes but leaves thread and query navigation steady', () => {
+    mocks.onNavigate.mockClear();
+    renderLayout();
+    const navigate = mocks.onNavigate.mock.calls[0][0];
+    const room = {
+      url: new URL('https://chat.example.test/chat/server/room'),
+      route: { id: '/chat/[serverId]/[roomId]' },
+      params: { serverId: 'server', roomId: 'room' }
+    };
+    expect(navigate({ from: null, to: room })).toBeUndefined();
+    expect(navigate({ from: room, to: null })).toBeUndefined();
+    expect(
+      navigate({ from: room, to: { ...room, url: new URL(`${room.url}?filter=1`) } })
+    ).toBeUndefined();
+    expect(
+      navigate({
+        from: room,
+        to: {
+          ...room,
+          url: new URL(`${room.url}/thread`),
+          route: { id: '/chat/[serverId]/[roomId]/[threadId]' }
+        }
+      })
+    ).toBeUndefined();
+    expect(
+      navigate({
+        from: room,
+        to: {
+          ...room,
+          url: new URL('https://chat.example.test/chat/server/other'),
+          params: { ...room.params, roomId: 'other' }
+        }
+      })
+    ).toBeTypeOf('function');
+    expect(
+      navigate({
+        from: room,
+        to: {
+          url: new URL('https://chat.example.test/chat/server/manage/server'),
+          route: { id: '/chat/[serverId]/manage/server' },
+          params: { serverId: 'server' }
+        }
+      })
+    ).toBeTypeOf('function');
+  });
+});
 
 describe('OAuth page layout', () => {
   beforeEach(() => {
@@ -279,6 +341,82 @@ describe('OAuth page layout', () => {
     const view = renderLayout();
     await expect.element(view.getByTestId('app-frame')).toBeInTheDocument();
     await expect.element(view.getByRole('button', { name: 'Toggle sidebar' })).toBeVisible();
+  });
+});
+
+describe('wide call navigation layout', () => {
+  let previousViewport: { width: number; height: number };
+  beforeEach(() => {
+    previousViewport = { width: window.innerWidth, height: window.innerHeight };
+  });
+
+  afterEach(async () => {
+    mocks.appUi.isRoomCallWide = false;
+    await browserPage.viewport(previousViewport.width, previousViewport.height);
+    resetSidebar();
+    vi.clearAllMocks();
+  });
+
+  it('hides navigation below 1024 px only while a call is wide', async () => {
+    const view = renderLayout(
+      '<div class="contents"><aside data-app-sidebar="true" data-testid="server-sidebar">Rooms</aside><main>Call</main></div>'
+    );
+    sidebarNav.setMobile(false);
+    if (!sidebarNav.isOpen) sidebarNav.toggle();
+    mocks.appUi.isRoomCallWide = true;
+
+    for (const width of [1440, 1024, 1023, 800, 390, 1440]) {
+      await browserPage.viewport(width, 480);
+      for (const testId of ['server-sidebar', 'mobile-sidebar-panel']) {
+        const panel = view.getByTestId(testId);
+        if (width < 1024) await expect.element(panel).not.toBeVisible();
+        else await expect.element(panel).toBeVisible();
+      }
+    }
+
+    await browserPage.viewport(800, 480);
+    mocks.appUi.isRoomCallWide = false;
+    await expect.element(view.getByTestId('server-sidebar')).toBeVisible();
+    await expect.element(view.getByTestId('mobile-sidebar-panel')).toBeVisible();
+  });
+});
+
+describe('room member navigation boundary', () => {
+  it('checks visible member demand on entry, room changes, and resize', async () => {
+    const loadRoomMembers = vi.fn();
+    vi.mocked(serverRegistry.tryGetStore).mockReturnValue({
+      loadRoomMembers,
+      serverInfo: {},
+      currentUser: { user: null }
+    } as never);
+    page.route.id = '/chat/[serverId]/[roomId]';
+    Object.assign(page, { params: { serverId: '-', roomId: 'room-1' } });
+    try {
+      renderLayout();
+      const navigate = mocks.afterNavigate.mock.calls.at(-1)![0];
+      // Native resize events can arrive after the previous viewport test.
+      // Check each synchronous trigger before yielding to browser events.
+      mocks.appUi.loadVisibleRoomMembers.mockClear();
+      const entered = navigate({ from: null, to: { route: page.route } });
+      expect(mocks.appUi.loadVisibleRoomMembers).toHaveBeenCalledOnce();
+      await entered;
+
+      page.route.id = '/chat/[serverId]/[roomId]/[threadId]';
+      Object.assign(page, { params: { serverId: '-', roomId: 'room-2', threadId: 'thread' } });
+      await tick();
+      mocks.appUi.loadVisibleRoomMembers.mockClear();
+      const changedRoom = navigate({ from: null, to: { route: page.route } });
+      expect(mocks.appUi.loadVisibleRoomMembers).toHaveBeenCalledOnce();
+      await changedRoom;
+      mocks.appUi.loadVisibleRoomMembers.mockClear();
+      window.dispatchEvent(new Event('resize'));
+      expect(mocks.appUi.loadVisibleRoomMembers).toHaveBeenCalledOnce();
+      expect(loadRoomMembers).not.toHaveBeenCalled();
+    } finally {
+      page.route.id = '/';
+      Object.assign(page, { params: {} });
+      vi.mocked(serverRegistry.tryGetStore).mockReturnValue(undefined);
+    }
   });
 });
 

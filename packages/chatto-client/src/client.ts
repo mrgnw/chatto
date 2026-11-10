@@ -11,21 +11,28 @@
 import { parseServerUrl } from './util/serverUrl.js';
 import type { ConnectOptions, Server } from './server/server.js';
 import { EventBusManager, type LiveServers } from './server/realtimeTransport.js';
-import { ServerRegistry } from './server/registry.js';
+import { ServerRegistry, type ServerRegistryPersistence } from './server/registry.js';
 import { ServerConnectionManager } from './server/serverConnection.js';
 import { startClientRuntime, type ClientRuntime } from './server/runtime.js';
 import { emptyServerSession } from './server/sessions.js';
 import { keepRecentLimits, type KeepRecent } from './server/roomStores.js';
+import { KnownServers } from './server/knownServers.js';
 
 /** Settings for {@link createClient}. */
 export interface ClientOptions {
   /**
-   * Where the client keeps its server catalogue and renewable sessions.
+   * Where the client keeps registrations, known discovery sources, and renewable sessions.
    * `memory` (the default) keeps nothing between runs. `device` uses the
    * browser's local storage and restores the servers at creation; a process
    * can have one such client.
    */
   storage?: 'memory' | 'device';
+  /**
+   * Durable native-host storage, used instead of browser device storage.
+   * The host owns encryption and exclusive process access. Synchronous writes
+   * must be durable before returning so refresh request IDs survive a crash.
+   */
+  persistence?: ServerRegistryPersistence;
   /**
    * Treat a server on the page's own origin as the origin server, which uses
    * the browser's cookie session. Default: false. A process can have one
@@ -55,6 +62,8 @@ let connectionCount = 0;
 
 /** An isolated Chatto client; see the module documentation. */
 export class ChattoClient {
+  /** Explicit discovery sources, independent from registered servers and their sessions. */
+  readonly knownServers: KnownServers;
   /** The client's servers, sessions, and stores. */
   readonly registry: ServerRegistry;
   /** The client's server connections: endpoints, tokens, and status. */
@@ -78,11 +87,23 @@ export class ChattoClient {
       throw new Error('A process can have one Chatto client for the origin server');
     }
     const keepRecent = keepRecentLimits(options.keepRecent);
+    let discoveryStorage: Storage | undefined;
+    try {
+      if (options.storage === 'device' && typeof localStorage !== 'undefined')
+        discoveryStorage = localStorage;
+    } catch {
+      // Some browser hosts deny access to local storage.
+    }
+    this.knownServers = new KnownServers(discoveryStorage);
     this.realtime = new EventBusManager({ liveServers: options.liveServers ?? 'all' });
     this.connections = new ServerConnectionManager(() => this.registry);
     this.registry = new ServerRegistry(
       { connections: this.connections, realtime: this.realtime, keepRecent },
-      { deviceStorage: options.storage === 'device', originServer: options.originServer ?? false }
+      {
+        deviceStorage: options.storage === 'device',
+        originServer: options.originServer ?? false,
+        persistence: options.persistence
+      }
     );
     if (options.storage === 'device') exclusiveClients.set('deviceStorage', this);
     if (options.originServer) exclusiveClients.set('originServer', this);

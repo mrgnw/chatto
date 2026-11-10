@@ -1,5 +1,6 @@
 {
   "ui": {
+    "help": "說明",
     "toggle_sidebar": "切換側邊欄",
     "notifications": "通知",
     "open_quick_switcher": "開啟快速切換器",
@@ -7,7 +8,6 @@
     "realtime_paused": "即時更新已暫停。正在重新連線...",
     "update_available": "有新版本可用",
     "reload": "重新載入",
-    "sign_out": "登出",
     "close": "關閉",
     "auth_status": {
       "origin_title": "工作階段已過期",
@@ -65,12 +65,14 @@
       "loading": "正在載入..."
     },
     "image_modal": {
+      "open_larger": "放大顯示",
       "previous": "上一張圖片",
       "next": "下一張圖片",
       "fallback_alt": "圖片",
       "zoom_in": "放大",
       "zoom_out": "縮小",
       "fit": "符合視窗",
+      "pause_animation": "暫停動畫",
       "details": "詳細資料",
       "file_type": "檔案類型"
     },

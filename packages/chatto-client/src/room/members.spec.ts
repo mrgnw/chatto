@@ -1,4 +1,5 @@
 import { signal } from '../reactivity/index.js';
+import { Code, ConnectError } from '../api/connect.js';
 import { PresenceStatus } from '@chatto/api-types/api/v1/presence_pb';
 import { DirectoryMember } from '@chatto/api-types/api/v1/member_directory_pb';
 import { describe, expect, it, vi } from 'vitest';
@@ -79,6 +80,159 @@ function createStore(
 }
 
 describe('RoomMembersStore', () => {
+  it.each([Code.Unavailable, Code.PermissionDenied, Code.NotFound])(
+    'retains refreshed mentions only for transient failures: %s',
+    async (code) => {
+      const api = new FakeMemberDirectoryAPI([pageResult([user('alice')])]);
+      const store = new RoomMembersStore('room', api);
+      store.retainMentions(['alice']);
+      await vi.waitFor(() => expect(store.mentionMembers).toHaveLength(1));
+      vi.mocked(api.listRoomMembers).mockRejectedValueOnce(new ConnectError('failed', code));
+      store.refreshMentions('recovery');
+      expect(store.mentionMembers).toHaveLength(1);
+      await vi.waitFor(() =>
+        expect(vi.mocked(api.listRoomMembers).mock.settledResults[1]?.type).toBe('rejected')
+      );
+      // Wait for the lookup's completion handler, not only the API call.
+      await vi.waitFor(() => {
+        if (code !== Code.Unavailable) expect(store.mentionMembers).toEqual([]);
+        else expect(store.mentionMembers).toHaveLength(1);
+      });
+      store.dispose();
+    }
+  );
+
+  it('resolves a previously missing handle after a matching profile arrives', async () => {
+    const api = new FakeMemberDirectoryAPI([pageResult([]), pageResult([user('alice')])]);
+    const store = new RoomMembersStore('room', api);
+    store.retainMentions(['alice']);
+    await vi.waitFor(() => expect(api.listRoomMembers).toHaveResolved());
+    store.updateUsers([user('alice')]);
+    await vi.waitFor(() => expect(store.mentionMembers).toHaveLength(1));
+    expect(api.listRoomMembers).toHaveBeenCalledTimes(2);
+    store.dispose();
+  });
+
+  it('keeps resolved mentions when unchanged or unrelated profiles arrive', async () => {
+    const api = new FakeMemberDirectoryAPI([pageResult([user('alice')])]);
+    const store = new RoomMembersStore('room', api);
+    store.retainMentions(['alice']);
+    await vi.waitFor(() => expect(store.mentionMembers).toHaveLength(1));
+
+    store.updateUsers([user('alice'), user('bob')]);
+    expect(store.mentionMembers.map((member) => member.id)).toEqual(['alice']);
+    await Promise.resolve();
+    expect(api.listRoomMembers).toHaveBeenCalledTimes(1);
+    store.dispose();
+  });
+
+  it('does not resolve a departed member from an older page', async () => {
+    const api = new FakeMemberDirectoryAPI([pageResult([user('alice')])]);
+    const store = new RoomMembersStore('room', api);
+    await store.applyMembership('alice', false, 'leave-cursor');
+    store.retainMentions(['alice']);
+    await vi.waitFor(() => expect(api.listRoomMembers).toHaveResolved());
+    expect(store.mentionMembers).toEqual([]);
+    expect(api.listRoomMembers).toHaveBeenCalledWith(
+      'room',
+      'alice',
+      250,
+      0,
+      expect.objectContaining({ minimumCursor: 'leave-cursor' })
+    );
+  });
+
+  it('uses current profile names and discards matches after a rename', async () => {
+    const api = new FakeMemberDirectoryAPI([pageResult([user('alice')]), pageResult([])]);
+    const store = new RoomMembersStore('room', api);
+    store.retainMentions(['alice']);
+    await vi.waitFor(() => expect(store.mentionMembers).toHaveLength(1));
+    store.updateUsers([user('alice', 'renamed')]);
+    await vi.waitFor(() => expect(api.listRoomMembers).toHaveBeenCalledTimes(2));
+    expect(store.mentionMembers).toEqual([]);
+  });
+
+  it('stops matching-page pagination when the last consumer leaves', async () => {
+    const pending = deferred<MemberDirectoryPage>();
+    const api = new FakeMemberDirectoryAPI([pending.promise]);
+    const store = new RoomMembersStore('room', api);
+    const release = store.retainMentions(['alice']);
+    release();
+    pending.resolve(pageResult([user('not-alice')], true, 2));
+    await vi.waitFor(() => expect(api.listRoomMembers).toHaveResolved());
+    expect(api.listRoomMembers).toHaveBeenCalledTimes(1);
+    expect(store.mentionMembers).toEqual([]);
+  });
+
+  it('resolves shared visible handles beyond the first matching page without loading the directory', async () => {
+    const first = deferred<MemberDirectoryPage>();
+    const api = new FakeMemberDirectoryAPI([first.promise, pageResult([user('alice')])]);
+    const store = new RoomMembersStore('room', api);
+    const release = store.retainMentions(['ALICE']);
+    const releaseAgain = store.retainMentions(['alice']);
+    expect(api.listRoomMembers).toHaveBeenCalledTimes(1);
+    first.resolve(pageResult([user('not-alice')], true, 2));
+    await vi.waitFor(() =>
+      expect(store.mentionMembers.map((member) => member.id)).toEqual(['alice'])
+    );
+    expect(api.listRoomMembers).toHaveBeenLastCalledWith(
+      'room',
+      'alice',
+      250,
+      1,
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
+    );
+    expect(store.members).toEqual([]);
+    expect(store.hasRequestedList).toBe(false);
+    expect(api.listOnlineRoomMembers).not.toHaveBeenCalled();
+    release();
+    expect(store.mentionMembers).toHaveLength(1);
+    releaseAgain();
+    expect(store.mentionMembers).toEqual([]);
+    store.retainMentions(['alice']);
+    expect(api.listRoomMembers).toHaveBeenCalledTimes(2);
+  });
+
+  it('caches missing mentions and retries them after a membership change', async () => {
+    const api = new FakeMemberDirectoryAPI([pageResult([]), pageResult([user('alice')])]);
+    const store = new RoomMembersStore('room', api);
+    const release = store.retainMentions(['alice']);
+    await vi.waitFor(() => expect(api.listRoomMembers).toHaveResolved());
+    release();
+    store.retainMentions(['alice']);
+    expect(api.listRoomMembers).toHaveBeenCalledTimes(1);
+    await store.applyMembership('alice', true);
+    await vi.waitFor(() => expect(store.mentionMembers).toHaveLength(1));
+    expect(store.hasRequestedList).toBe(false);
+  });
+
+  it('fences stale mention reads and waits for restored access before retrying', async () => {
+    const allowed = signal(true);
+    const stale = deferred<MemberDirectoryPage>();
+    const api = new FakeMemberDirectoryAPI([stale.promise, pageResult([user('bob')])]);
+    const store = new RoomMembersStore('room', api, { canResolveMentions: () => allowed.get() });
+    store.retainMentions(['bob']);
+    allowed.set(false);
+    store.resetProjectionState();
+    stale.resolve(pageResult([user('bob')]));
+    await vi.waitFor(() => expect(api.listRoomMembers).toHaveResolved());
+    expect(store.mentionMembers).toEqual([]);
+    expect(api.listRoomMembers).toHaveBeenCalledTimes(1);
+    allowed.set(true);
+    store.resumeMentions();
+    await vi.waitFor(() => expect(store.mentionMembers).toHaveLength(1));
+    expect(api.listRoomMembers).toHaveBeenCalledTimes(2);
+  });
+
+  it('gets bounded bare-mention suggestions without starting a directory scan', async () => {
+    const api = new FakeMemberDirectoryAPI([pageResult([user('alice')], true, 500)]);
+    const store = new RoomMembersStore('room', api);
+    expect((await store.searchMembers('')).map((member) => member.id)).toEqual(['alice']);
+    expect(api.listRoomMembers).toHaveBeenCalledExactlyOnceWith('room', '', 10, 0);
+    expect(api.listOnlineRoomMembers).not.toHaveBeenCalled();
+    expect(store.hasFirstPage).toBe(false);
+    expect(store.hasLoadedAll).toBe(false);
+  });
   it('discards a read in progress and starts no reads after dispose', async () => {
     const page = deferred<MemberDirectoryPage>();
     const api = new FakeMemberDirectoryAPI([page.promise, pageResult([user('u2')])]);
@@ -667,11 +821,13 @@ describe('RoomMembersStore', () => {
     }
   });
 
-  it('keeps the published first page when background hydration fails', async () => {
+  it('keeps the published first page when background hydration fails and during retry', async () => {
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const retry = deferred<MemberDirectoryPage>();
     const fakeAPI = new FakeMemberDirectoryAPI([
       pageResult([user('u1', 'alice')], true, 3),
-      Promise.reject(new Error('network failed'))
+      Promise.reject(new Error('network failed')),
+      retry.promise
     ]);
     const store = new RoomMembersStore('room-1', fakeAPI);
 
@@ -684,6 +840,15 @@ describe('RoomMembersStore', () => {
       expect(store.hasLoadedAll).toBe(false);
       expect(store.loadError).toMatchObject({ message: 'network failed' });
       expect(fakeAPI.listRoomMembers).toHaveBeenCalledTimes(2);
+      const loading = store.loadInitial();
+      expect(store.members.map((member) => member.login)).toEqual(['alice']);
+      expect(store.isInitialLoading).toBe(false);
+      expect(store.isBackgroundLoading).toBe(true);
+      retry.resolve(pageResult([user('u1', 'alice'), user('u2', 'bob')]));
+      await loading;
+      expect(store.members.map((member) => member.login)).toEqual(['alice', 'bob']);
+      expect(store.hasLoadedAll).toBe(true);
+      expect(store.isBackgroundLoading).toBe(false);
     } finally {
       consoleErrorSpy.mockRestore();
     }

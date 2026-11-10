@@ -1,5 +1,6 @@
 {
   "ui": {
+    "help": "Abi",
     "toggle_sidebar": "Lülita külgriba sisse",
     "notifications": "Märguanded",
     "open_quick_switcher": "Avage kiirlüliti",
@@ -7,7 +8,6 @@
     "realtime_paused": "Reaalajas värskendused peatati. Ühenduse taastamine...",
     "update_available": "Saadaval on uus versioon",
     "reload": "Laadi uuesti",
-    "sign_out": "Logi välja",
     "close": "Sule",
     "auth_status": {
       "origin_title": "Seanss aegus",
@@ -65,12 +65,14 @@
       "loading": "Laadimine..."
     },
     "image_modal": {
+      "open_larger": "Ava suuremalt",
       "previous": "Eelmine pilt",
       "next": "Järgmine pilt",
       "fallback_alt": "Pilt",
       "zoom_in": "Suurenda",
       "zoom_out": "Vähenda",
       "fit": "Mahuta",
+      "pause_animation": "Peatage animatsioon",
       "details": "Üksikasjad",
       "file_type": "Faili tüüp"
     },

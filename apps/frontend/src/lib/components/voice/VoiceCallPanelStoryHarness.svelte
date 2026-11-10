@@ -10,6 +10,9 @@
   import { type RegisteredServer } from '@chatto/client/server/registry';
   import { provideServerScope } from '$lib/state/server/scope.svelte';
   import { serverUi } from '$lib/state/server/serverUi';
+  import { provideAppUiState } from '$lib/state/appUi.svelte';
+  import { AppHeader } from '$lib/ui';
+  import AppCallControls from './AppCallControls.svelte';
 
   type VoiceCallPanelProps = {
     roomId: string;
@@ -20,6 +23,7 @@
   let {
     layout = 'stage',
     withPaneHeader = false,
+    withAppHeader = false,
     scenario = 'screen',
     animateVoice = false,
     initiallyMuted = false,
@@ -30,6 +34,8 @@
     layout?: 'sidebar' | 'stage';
     /** Render the actual room pane to exercise its fullscreen header. */
     withPaneHeader?: boolean;
+    /** Show the app-wide controls with the same connected-call fixture. */
+    withAppHeader?: boolean;
     scenario?: 'screen' | 'screen-voice' | 'screen-single-secondary' | 'camera' | 'voice' | 'idle';
     animateVoice?: boolean;
     initiallyMuted?: boolean;
@@ -42,6 +48,7 @@
   } = $props();
 
   const roomId = 'storybook-call-room';
+  provideAppUiState();
   const storybookServerId = 'storybook-call-server';
   provideUserProfiles();
   const getScopedServerId = () => serverRegistry.originServer?.id ?? storybookServerId;
@@ -275,7 +282,6 @@
     const voiceCall = serverUi(store).voiceCall;
     voiceCall.roomId = scenario === 'idle' ? null : roomId;
     voiceCall.connected = scenario !== 'idle';
-    voiceCall.audioBoostAvailable = true;
     voiceCall.connecting = false;
     voiceCall.isMuted = initiallyMuted;
     voiceCall.isCameraEnabled = scenario !== 'voice' && scenario !== 'screen-voice';
@@ -302,23 +308,25 @@
     if (!animateVoice) return;
     const call = serverUi(serverRegistry.getStore(getScopedServerId())).voiceCall;
     const original = call.getAudioLevel;
-    const originalScreen = call.getScreenShareAudioLevel;
     call.getAudioLevel = (identity) => {
       const time = performance.now() / 1000 + identity.length;
       const audioLevel =
         time % 7 < 4.5 ? 0.005 + Math.pow((Math.sin(time * 8) + 1) / 2, 2) * 0.075 : 0;
       return { isSpeaking: audioLevel > 0, audioLevel };
     };
-    call.getScreenShareAudioLevel = () => {
-      const time = performance.now() / 1000;
-      return time % 9 < 5 ? 0.03 + (Math.sin(time * 2) + 1) * 0.06 : 0;
-    };
     return () => {
       call.getAudioLevel = original;
-      call.getScreenShareAudioLevel = originalScreen;
     };
   });
 </script>
+
+{#if withAppHeader}
+  <AppHeader>
+    {#snippet callControls(activeStore)}
+      <AppCallControls {activeStore} />
+    {/snippet}
+  </AppHeader>
+{/if}
 
 {#if playableMedia}
   <button

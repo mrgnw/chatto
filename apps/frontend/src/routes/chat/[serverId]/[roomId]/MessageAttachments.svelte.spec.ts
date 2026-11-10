@@ -210,7 +210,7 @@ describe('MessageAttachments', () => {
     expect(view.container.querySelector('iframe')).toBeNull();
   });
 
-  it.each(['audio/mpeg', 'video/mp4'])(
+  it.each(['audio/mpeg'])(
     'pauses only the selected %s before opening its viewer',
     async (contentType) => {
       const attachment = fileAttachment({ filename: 'selected-media', contentType });
@@ -234,12 +234,7 @@ describe('MessageAttachments', () => {
     }
   );
 
-  it.each([
-    hlsVideoAttachment(),
-    hlsVideoAttachment({ filename: 'loop.gif', contentType: 'image/gif' }),
-    fileAttachment({ filename: 'raw.mp4', contentType: 'video/mp4' }),
-    fileAttachment({ filename: 'voice.mp3', contentType: 'audio/mpeg' })
-  ])(
+  it.each([fileAttachment({ filename: 'voice.mp3', contentType: 'audio/mpeg' })])(
     'opens $filename through an icon with an accessible filename and tooltip',
     async (attachment) => {
       const view = renderAttachment(attachment);
@@ -271,9 +266,9 @@ describe('MessageAttachments', () => {
       );
       const buttons = [...container.querySelectorAll<HTMLButtonElement>('button')];
       expect(buttons.map((button) => button.getAttribute('aria-label'))).toEqual([
-        ...(canDeleteAttachment ? ['Delete attachment'] : []),
         'View voice.mp3',
-        ...(canEditAttachmentDescription ? ['Add description'] : [])
+        ...(canEditAttachmentDescription ? ['Add description'] : []),
+        ...(canDeleteAttachment ? ['Delete attachment'] : [])
       ]);
       const audio = container.querySelector('audio')!;
       const frame = audio.closest<HTMLElement>('[data-attachment-media]')!;
@@ -292,7 +287,9 @@ describe('MessageAttachments', () => {
           if (width === 640) {
             expect(frameBounds.height).toBeLessThanOrEqual(70);
             if (index > 0) {
-              expect(bounds.left - buttons[index - 1].getBoundingClientRect().right).toBe(4);
+              const gap = bounds.left - buttons[index - 1].getBoundingClientRect().right;
+              if (button.parentElement === buttons[index - 1].parentElement) expect(gap).toBe(4);
+              else expect(gap).toBeGreaterThanOrEqual(12);
             }
           }
         }
@@ -362,11 +359,11 @@ describe('MessageAttachments', () => {
     const { image, button } = imageFrame(container, 'tall.jpg');
 
     expect(button.getAttribute('style')).toContain('width: 40px');
-    expect(button.getAttribute('style')).toContain('aspect-ratio: 40 / 200');
+    expect(image.style.aspectRatio).toBe('40 / 200');
     expect(button.getBoundingClientRect().height).toBeLessThanOrEqual(202);
     expect(image.className).toContain('object-contain');
     expect(image.className).not.toContain('object-cover');
-    expect(image.className).toContain('h-full');
+    expect(image.className).toContain('h-auto');
     expect(image.className).toContain('w-full');
   });
 
@@ -378,21 +375,32 @@ describe('MessageAttachments', () => {
     const { button } = imageFrame(container, 'tall.jpg');
     const wrapper = button.parentElement!.getBoundingClientRect();
     const actions = [...container.querySelectorAll<HTMLElement>('.attachment-action-button')];
-    const [first, last] = actions.map((action) => action.getBoundingClientRect());
+    const [first] = actions.map((action) => action.getBoundingClientRect());
 
     expect(button.getBoundingClientRect().width).toBe(40);
-    expect(first.left - wrapper.left).toBeGreaterThanOrEqual(8);
-    expect(wrapper.right - last.right).toBe(8);
-    expect(first.top - wrapper.top).toBe(8);
-    expect(last.top).toBe(first.top);
-    expect(last.left - first.right).toBe(4);
+    expect(first.left - wrapper.left).toBeGreaterThanOrEqual(5);
+    expect(actions.at(-1)!.getBoundingClientRect().right).toBeLessThanOrEqual(wrapper.right);
+    expect(first.top).toBeGreaterThanOrEqual(button.getBoundingClientRect().bottom);
+    expect(actions.at(-1)!.getBoundingClientRect().bottom).toBeLessThanOrEqual(wrapper.bottom);
     for (const action of actions) {
       expect(action.getBoundingClientRect().width).toBe(28);
       expect(action.getBoundingClientRect().height).toBe(28);
     }
   });
 
-  it.each([false, true])('balances image action insets (gallery: %s)', (gallery) => {
+  it('keeps minimum-width portrait thumbnails at the height limit', () => {
+    const { container } = renderAttachment(
+      imageAttachment({ filename: 'very-tall.jpg', width: 100, height: 2000 })
+    );
+    const { image, button } = imageFrame(container, 'very-tall.jpg');
+    const bounds = button.getBoundingClientRect();
+
+    expect(bounds.width).toBe(24);
+    expect(bounds.height).toBe(200);
+    expect(image.className).toContain('object-contain');
+  });
+
+  it.each([false, true])('keeps image actions inside their own frame (gallery: %s)', (gallery) => {
     const attachments = [imageAttachment({ id: 'first', filename: 'first.jpg' })];
     if (gallery) attachments.push(imageAttachment({ id: 'second', filename: 'second.jpg' }));
     const { container } = renderAttachments(attachments, {
@@ -402,11 +410,12 @@ describe('MessageAttachments', () => {
     const { button } = imageFrame(container, 'first.jpg');
     const frame = button.getBoundingClientRect();
     const edit = button
-      .parentElement!.querySelector<HTMLElement>('[aria-label="Add description"]')!
+      .parentElement!.querySelector<HTMLElement>('[aria-label="Delete attachment"]')!
       .getBoundingClientRect();
 
-    expect(edit.top - frame.top).toBe(8);
-    expect(frame.right - edit.right).toBe(8);
+    expect(edit.top).toBeGreaterThanOrEqual(frame.bottom);
+    expect(edit.bottom).toBeLessThanOrEqual(button.parentElement!.getBoundingClientRect().bottom);
+    expect(edit.right).toBeLessThanOrEqual(button.parentElement!.getBoundingClientRect().right);
   });
 
   it('renders ultra-wide landscape images as contained shallow strips', () => {
@@ -421,10 +430,10 @@ describe('MessageAttachments', () => {
     const { image, button } = imageFrame(container, 'ultra-wide.jpg');
 
     expect(button.getAttribute('style')).toContain('width: 480px');
-    expect(button.getAttribute('style')).toContain('aspect-ratio: 480 / 24');
+    expect(image.style.aspectRatio).toBe('480 / 24');
     expect(image.className).toContain('object-contain');
     expect(image.className).not.toContain('object-cover');
-    expect(image.className).toContain('h-full');
+    expect(image.className).toContain('h-auto');
     expect(image.className).toContain('w-full');
   });
 
@@ -440,9 +449,9 @@ describe('MessageAttachments', () => {
     const { image, button } = imageFrame(container, 'ordinary.jpg');
 
     expect(button.getAttribute('style')).toContain('width: 356px');
-    expect(button.getAttribute('style')).toContain('aspect-ratio: 356 / 200');
+    expect(image.style.aspectRatio).toBe('356 / 200');
     expect(image.className).toContain('object-cover');
-    expect(image.className).toContain('h-full');
+    expect(image.className).toContain('h-auto');
     expect(image.className).toContain('w-full');
   });
 
@@ -453,33 +462,82 @@ describe('MessageAttachments', () => {
     const { image, button } = imageFrame(container, 'unknown-size.jpg');
 
     expect(button.style.width).toBe('320px');
-    expect(button.style.aspectRatio).toBe('320 / 200');
-    expect(button.getBoundingClientRect().height).toBeCloseTo(200, 0);
+    expect(image.style.aspectRatio).toBe('320 / 200');
+    const initialHeight = button.getBoundingClientRect().height;
+    expect(initialHeight).toBeGreaterThan(190);
     expect(image.className).toContain('object-contain');
     expect(button.querySelector('[data-loading-fog]')).not.toBeNull();
 
     image.dispatchEvent(new Event('load'));
     await vi.waitFor(() => expect(button.querySelector('[data-loading-fog]')).toBeNull());
-    expect(button.getBoundingClientRect().height).toBeCloseTo(200, 0);
+    expect(button.getBoundingClientRect().height).toBe(initialHeight);
   });
 
-  it('scales a single image with the message width and preserves its proportions', async () => {
+  it.each([
+    { width: 1600, height: 800, frameWidth: 400 },
+    { width: 2000, height: 400, frameWidth: 480 },
+    { width: 320, height: 1600, frameWidth: 40 }
+  ])('preserves the content ratio inside the image rim ($width × $height)', async (size) => {
+    const url = `data:image/svg+xml,${encodeURIComponent(
+      `<svg xmlns="http://www.w3.org/2000/svg" width="${size.width}" height="${size.height}"><rect width="100%" height="100%" fill="teal"/></svg>`
+    )}`;
     const { container } = renderAttachment(
-      imageAttachment({ filename: 'wide.jpg', width: 1600, height: 800 })
+      imageAttachment({
+        filename: 'ratio.svg',
+        width: size.width,
+        height: size.height,
+        assetUrl: { url, expiresAt: '2099-01-01T00:00:00Z' },
+        thumbnailAssetUrl: null
+      })
     );
-    const { button } = imageFrame(container, 'wide.jpg');
+    const { image, button } = imageFrame(container, 'ratio.svg');
+    await vi.waitFor(() => expect(image.naturalWidth).toBe(size.width));
 
     for (const width of [240, 120, 640]) {
       container.style.width = `${width}px`;
       await vi.waitFor(() => {
-        const bounds = button.getBoundingClientRect();
-        expect(bounds.width).toBe(Math.min(width, 400));
-        expect(bounds.height).toBeCloseTo(bounds.width / 2, 0);
+        const bounds = button.parentElement!.getBoundingClientRect();
+        const content = image.getBoundingClientRect();
+        expect(bounds.width).toBe(Math.min(width, size.frameWidth + 10));
+        expect(content.height).toBeCloseTo((content.width * size.height) / size.width, 1);
+        expect(content.left - bounds.left).toBe(5);
+        expect(bounds.right - content.right).toBe(5);
+        expect(content.top - bounds.top).toBe(5);
+        expect(bounds.bottom - content.bottom).toBeCloseTo(5, 1);
         expect(container.scrollWidth).toBe(container.clientWidth);
       });
     }
     expect(container.querySelector('[data-testid="message-image-gallery"]')).toBeNull();
   });
+
+  it.each([
+    [1280, 720, 480, 270],
+    [1080, 1920, 180, 320],
+    [0, 0, 480, 270]
+  ])(
+    'reserves raw video geometry before metadata and on remount (%sx%s)',
+    async (width, height, expectedWidth, expectedHeight) => {
+      for (let mount = 0; mount < 2; mount += 1) {
+        const view = renderAttachment(
+          fileAttachment({
+            filename: 'raw.mp4',
+            contentType: 'video/mp4',
+            width,
+            height
+          })
+        );
+        view.container.style.width = '640px';
+        await expect.poll(() => view.container.querySelector('video')).toBeTruthy();
+        const frame = view.container.querySelector<HTMLElement>('[data-attachment-media]')!;
+        expect(frame.getBoundingClientRect().width).toBeCloseTo(expectedWidth, 0);
+        expect(view.container.querySelector('video')!.getBoundingClientRect().height).toBeCloseTo(
+          ((expectedWidth - 10) * expectedHeight) / expectedWidth,
+          0
+        );
+        await view.unmount();
+      }
+    }
+  );
 
   it.each([true, false])(
     'keeps video attachments and long filenames inside the message (processed: %s)',
@@ -516,7 +574,7 @@ describe('MessageAttachments', () => {
   );
 
   it.each([true, false])(
-    'keeps actions clear of playback controls on narrow videos (processed: %s)',
+    'keeps management actions inside narrow video frames (processed: %s)',
     async (processed) => {
       const attachment = processed
         ? hlsVideoAttachment()
@@ -530,29 +588,66 @@ describe('MessageAttachments', () => {
         : 'video';
       await expect.poll(() => container.querySelector(playerSelector)).toBeTruthy();
       const player = container.querySelector<HTMLElement>(playerSelector)!;
-      const edit = container.querySelector<HTMLElement>('[aria-label="Add description"]')!;
+      const edit = container.querySelector<HTMLElement>('[aria-label="Delete attachment"]')!;
       const actions = [...container.querySelectorAll<HTMLElement>('.attachment-action-button')];
       for (const width of [120, 240, 320]) {
         container.style.width = `${width}px`;
         await expect.poll(() => player.getBoundingClientRect().width).toBeLessThanOrEqual(width);
-        expect(
-          player.getBoundingClientRect().bottom - edit.getBoundingClientRect().bottom
-        ).toBeGreaterThanOrEqual(48);
-        const bounds = actions.map((action) => action.getBoundingClientRect());
-        const frame = (processed ? player : player.parentElement!).getBoundingClientRect();
-        expect(bounds[0].top - frame.top).toBeCloseTo(
-          frame.right - bounds[bounds.length - 1].right,
-          1
+        expect(edit.getBoundingClientRect().top).toBeGreaterThanOrEqual(
+          player.getBoundingClientRect().bottom
         );
+        expect(edit.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+          player.parentElement!.getBoundingClientRect().bottom
+        );
+        const bounds = actions.map((action) => action.getBoundingClientRect());
+        const frame = player.parentElement!.getBoundingClientRect();
+        expect(bounds[bounds.length - 1].right).toBeLessThanOrEqual(frame.right);
         for (const [index, bound] of bounds.entries()) {
           expect(bound.width).toBe(28);
           expect(bound.height).toBe(28);
           expect(bound.top).toBe(bounds[0].top);
-          if (index > 0) expect(bound.left - bounds[index - 1].right).toBe(4);
+          if (index > 0) {
+            const gap = bound.left - bounds[index - 1].right;
+            if (actions[index].parentElement === actions[index - 1].parentElement)
+              expect(gap).toBe(4);
+            else expect(gap).toBeGreaterThanOrEqual(12);
+          }
         }
       }
     }
   );
+
+  it.each([
+    [3000, 1000, 480, 160],
+    [1000, 100, 480, 48],
+    [100, 1000, 32, 320]
+  ])('does not add a playback canvas to a %sx%s GIF', async (width, height, w, h) => {
+    const attachment = hlsVideoAttachment({ filename: 'loop.gif', contentType: 'image/gif' });
+    attachment.videoProcessing = { ...attachment.videoProcessing!, width, height };
+    const { container } = renderAttachment(attachment, {
+      canDeleteAttachment: true,
+      canEditAttachmentDescription: true
+    });
+    container.style.width = '640px';
+    await expect
+      .poll(() => container.querySelector('[data-testid="message-attachments-video-player"]'))
+      .toBeTruthy();
+    const player = container.querySelector<HTMLElement>('.preview-frame')!;
+    expect(player.getBoundingClientRect().width).toBe(Math.max(w, 56));
+    const canvas = player
+      .querySelector('[data-testid="message-attachments-video-player"]')!
+      .getBoundingClientRect();
+    expect(canvas.width).toBe(w - 10);
+    expect(canvas.height).toBeCloseTo(((w - 10) * h) / w, 0);
+    const wrapper = player.parentElement!;
+    expect(wrapper.classList.contains('attachment-video-frame')).toBe(false);
+    const actions = [...wrapper.querySelectorAll<HTMLElement>('.attachment-action-button')];
+    for (const action of actions) {
+      expect(action.getBoundingClientRect().left).toBeGreaterThanOrEqual(
+        wrapper.getBoundingClientRect().left
+      );
+    }
+  });
 
   it('uses descriptions as image alt text and sends them to the image viewer', async () => {
     const description = 'A chart with a rising blue line.';
@@ -580,31 +675,40 @@ describe('MessageAttachments', () => {
     });
   });
 
-  it('places delete before edit in a row and uses a file-edit icon for descriptions', () => {
-    const { container } = renderAttachment(imageAttachment({ description: 'A chart.' }), {
+  it.each(['ltr', 'rtl'])(
+    'keeps management actions visible before and after focus in %s',
+    (direction) => {
+      const { container } = renderAttachment(
+        fileAttachment({ filename: 'raw.mp4', contentType: 'video/mp4' }),
+        {
+          canDeleteAttachment: true,
+          canEditAttachmentDescription: true
+        }
+      );
+      container.dir = direction;
+      const toolbar = container.querySelector<HTMLElement>('.preview-toolbar')!;
+      const frame = toolbar.parentElement!;
+      const before = frame.getBoundingClientRect();
+      expect(toolbar.querySelector('[aria-label="View raw.mp4"]')).toBeNull();
+      expect(getComputedStyle(toolbar).opacity).toBe('1');
+      toolbar.querySelector<HTMLButtonElement>('button')!.focus();
+      expect(getComputedStyle(toolbar).opacity).toBe('1');
+      expect(frame.getBoundingClientRect().height).toBe(before.height);
+      expect(frame.getBoundingClientRect().width).toBe(before.width);
+    }
+  );
+
+  it('shows management icons directly without opening a menu', async () => {
+    const view = renderAttachment(imageAttachment({ description: 'A chart.' }), {
       canDeleteAttachment: true,
       canEditAttachmentDescription: true
     });
-    const edit = container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Edit description"]'
-    )!;
-    const remove = container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Delete attachment"]'
-    )!;
-
-    expect([
-      ...container.querySelectorAll(
-        'button[aria-label="Delete attachment"], button[aria-label="Edit description"]'
-      )
-    ]).toEqual([remove, edit]);
-    expect(remove.getBoundingClientRect().right).toBeLessThanOrEqual(
-      edit.getBoundingClientRect().left
-    );
-    expect(remove.getBoundingClientRect().top).toBe(edit.getBoundingClientRect().top);
-    expect(edit.querySelector('span')?.classList.contains('icon-[uil--file-edit-alt]')).toBe(true);
+    await expect.element(view.getByRole('button', { name: 'Edit description' })).toBeVisible();
+    await expect.element(view.getByRole('button', { name: 'Delete attachment' })).toBeVisible();
+    expect(view.container.querySelector('[aria-haspopup="menu"]')).toBeNull();
   });
 
-  it('associates file controls with descriptions and opens the edit dialog', () => {
+  it('associates file controls with descriptions and opens the edit dialog', async () => {
     const description = 'Quarterly results in PDF format.';
     const { container } = renderAttachment(fileAttachment({ description }), {
       canEditAttachmentDescription: true
@@ -615,9 +719,7 @@ describe('MessageAttachments', () => {
 
     expect(download.getAttribute('aria-describedby')).toBe('attachment-description-event_1-file_1');
     expect(container.querySelector('button[aria-label="Show description"]')).toBeNull();
-    const edit = container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Edit description"]'
-    )!;
+    const edit = container.querySelector<HTMLButtonElement>('[aria-label="Edit description"]')!;
     edit.click();
 
     expect(attachmentMocks.pushState).toHaveBeenCalledWith('', {
@@ -632,39 +734,21 @@ describe('MessageAttachments', () => {
     });
   });
 
-  it('uses the same management controls for images and ordinary files', () => {
-    const { container } = renderAttachments(
+  it('uses the same direct management icons for images and ordinary files', async () => {
+    const view = renderAttachments(
       [
-        imageAttachment({
-          filename: 'delete-me.jpg'
-        }),
+        imageAttachment({ filename: 'delete-me.jpg' }),
         fileAttachment({ filename: 'delete-me.pdf' })
       ],
       { canDeleteAttachment: true, canEditAttachmentDescription: true }
     );
-
-    const deleteControls = container.querySelectorAll<HTMLElement>(
+    const triggers = view.container.querySelectorAll<HTMLButtonElement>(
       '[aria-label="Delete attachment"]'
     );
+    expect(triggers).toHaveLength(2);
+    expect(triggers[0].className).toBe(triggers[1].className);
+    triggers[1].click();
 
-    expect(deleteControls).toHaveLength(2);
-    expect(deleteControls[0].tagName).toBe('BUTTON');
-    expect(deleteControls[1].tagName).toBe('BUTTON');
-    expect(deleteControls[1].getAttribute('title')).toBe('Delete attachment');
-    expect(deleteControls[1].className).toBe(deleteControls[0].className);
-    expect(getComputedStyle(deleteControls[1].parentElement!).opacity).toBe('1');
-    const editControls = container.querySelectorAll<HTMLElement>('[aria-label="Add description"]');
-    expect(editControls).toHaveLength(2);
-    expect(editControls[1].className).toBe(editControls[0].className);
-    expect(editControls[1].parentElement).toBe(deleteControls[1].parentElement);
-    expect(deleteControls[1].getBoundingClientRect().right).toBeLessThanOrEqual(
-      editControls[1].getBoundingClientRect().left
-    );
-    for (const control of deleteControls) {
-      expect(control.querySelector('span')?.classList.contains('icon-[uil--trash-alt]')).toBe(true);
-    }
-
-    deleteControls[1].click();
     expect(attachmentMocks.pushState).toHaveBeenCalledWith('', {
       modal: {
         type: 'deleteAttachment',
@@ -699,19 +783,62 @@ describe('MessageAttachments', () => {
     expect(Array.from(players, (player) => player.dataset.autoLoop)).toEqual(['true', 'false']);
   });
 
-  it('does not render empty media URLs for attachments that are missing asset URLs', () => {
-    const { container } = renderAttachment(
-      imageAttachment({
-        filename: 'pending.jpg',
-        assetUrl: null,
-        thumbnailAssetUrl: null
+  it('opens a processed GIF from its canvas without a reader toolbar', async () => {
+    const gif = hlsVideoAttachment({
+      filename: 'animated.gif',
+      contentType: 'image/gif',
+      videoProcessing: {
+        ...hlsVideoAttachment().videoProcessing!,
+        hlsMasterPlaylistUrl: null,
+        variants: [
+          {
+            quality: '360p',
+            width: 640,
+            height: 360,
+            size: 1024,
+            assetUrl: {
+              url: 'https://chat.example.test/loop.mp4',
+              expiresAt: '2099-01-01T00:00:00Z'
+            }
+          }
+        ]
+      }
+    });
+    const view = renderAttachment(gif);
+    await view.getByTestId('message-attachments-video-player').click();
+    expect(view.container.querySelector('.preview-toolbar')).toBeNull();
+    expect(attachmentMocks.pushState).toHaveBeenCalledWith('', {
+      modal: expect.objectContaining({
+        type: 'attachmentViewer',
+        items: [expect.objectContaining({ id: gif.id })],
+        index: 0
       })
-    );
+    });
+  });
+
+  it('reserves the image frame while an asset URL is missing', async () => {
+    const attachment = imageAttachment({
+      filename: 'pending.jpg',
+      assetUrl: null,
+      thumbnailAssetUrl: null
+    });
+    const view = renderAttachment(attachment);
+    const { container } = view;
+    const button = container.querySelector<HTMLElement>('[data-message-image-attachment]')!;
+    const initialHeight = button.getBoundingClientRect().height;
 
     expect(container.querySelector('img[src=""]')).toBeNull();
     expect(container.querySelector('video[src=""]')).toBeNull();
     expect(container.querySelector('audio[src=""]')).toBeNull();
     expect(container.querySelector('img[alt="pending.jpg"]')).toBeNull();
+    await view.rerender({
+      attachments: [
+        { ...attachment, assetUrl: { url: transparentGif, expiresAt: '2099-01-01T00:00:00Z' } }
+      ]
+    });
+    const { image } = imageFrame(container, 'pending.jpg');
+    await vi.waitFor(() => expect(image.complete).toBe(true));
+    expect(button.getBoundingClientRect().height).toBe(initialHeight);
   });
 
   it('refreshes stale attachment URLs when mounted', async () => {

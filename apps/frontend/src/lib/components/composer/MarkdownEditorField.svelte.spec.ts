@@ -1,0 +1,132 @@
+import '../../../app.css';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { page, userEvent } from 'vitest/browser';
+import { render } from 'vitest-browser-svelte';
+import { loadLocaleMessages } from '$lib/i18n/messages';
+import { setReactiveLocale } from '$lib/i18n/state.svelte';
+import type { RoomMember } from '$lib/state/room';
+import MarkdownEditorField from './MarkdownEditorField.svelte';
+import { flushSync, tick } from 'svelte';
+import { loadEditor } from './loadEditor';
+
+/** Controlled directory responses exercise editor search ordering and cleanup. */
+function directory() {
+  const requests = new Map<string, (members: RoomMember[]) => void>();
+  const searchMembers = vi.fn(
+    (query: string) => new Promise<RoomMember[]>((resolve) => requests.set(query, resolve))
+  );
+  return { requests, searchMembers };
+}
+
+const bob: RoomMember = {
+  id: 'bob',
+  login: 'bob',
+  displayName: 'Bob Example',
+  avatarUrl: null,
+  presenceStatus: 0
+};
+
+describe('MarkdownEditorField mention lifecycle', () => {
+  beforeEach(async () => {
+    await loadLocaleMessages('en-GB');
+    setReactiveLocale('en-GB');
+  });
+
+  it.each(['markdown', 'visual'] as const)(
+    'mounts a loaded %s editor without a pending frame and keeps drafts separate',
+    async (editorKind) => {
+      await loadEditor(editorKind);
+      const first = render(MarkdownEditorField, {
+        editorKind,
+        label: 'First',
+        value: 'First draft'
+      });
+      flushSync();
+      expect(first.container.querySelector('[contenteditable="true"]')).not.toBeNull();
+      await tick();
+      expect(
+        first.container.querySelector('[contenteditable="true"]')?.getAttribute('aria-label')
+      ).toBe('First');
+      expect(first.container.querySelector('[contenteditable="true"]')?.textContent).toContain(
+        'First draft'
+      );
+      await first.unmount();
+      const second = render(MarkdownEditorField, {
+        editorKind,
+        label: 'Second',
+        value: 'Second draft'
+      });
+      flushSync();
+      expect(second.container.querySelector('[contenteditable="true"]')).not.toBeNull();
+      expect(second.container.querySelector('[data-loading-fog]')).toBeNull();
+      await tick();
+      expect(second.container.querySelector('[contenteditable="true"]')?.textContent).toContain(
+        'Second draft'
+      );
+      await second.rerender({ editorKind: editorKind === 'markdown' ? 'visual' : 'markdown' });
+      await expect
+        .poll(() => second.container.querySelector('[contenteditable="true"]')?.textContent)
+        .toContain('Second draft');
+    }
+  );
+
+  it('finds suggestions for bare @ without a loaded member list', async () => {
+    const searchMembers = vi.fn(async () => [bob]);
+    render(MarkdownEditorField, {
+      editorKind: 'markdown',
+      label: 'Notice',
+      placeholder: 'Write a notice',
+      mentions: { members: [], searchMembers }
+    });
+    await page.getByRole('textbox', { name: 'Write a notice', exact: true }).fill('@');
+    await expect.poll(() => searchMembers.mock.calls.length).toBe(1);
+    expect(searchMembers).toHaveBeenCalledWith('');
+    await expect.element(page.getByTestId('mention-autocomplete')).toHaveTextContent('Bob Example');
+  });
+
+  it.each(['markdown', 'visual'] as const)(
+    'closes the picker and discards pending search when the %s draft is replaced',
+    async (editorKind) => {
+      const { requests, searchMembers } = directory();
+      const view = render(MarkdownEditorField, {
+        editorKind,
+        label: 'Notice',
+        placeholder: 'Write a notice',
+        mentions: { members: [bob], searchMembers }
+      });
+      const editor = page.getByRole('textbox', { name: 'Write a notice', exact: true });
+      await editor.fill('@bo');
+      await expect.poll(() => searchMembers.mock.calls.length).toBe(1);
+      await expect.element(page.getByTestId('mention-autocomplete')).toBeVisible();
+      await view.rerender({ value: 'Replacement draft' });
+      requests.get('bo')!([bob]);
+      await expect.element(editor).toHaveTextContent('Replacement draft');
+      await expect.element(page.getByTestId('mention-autocomplete')).not.toBeInTheDocument();
+      await userEvent.keyboard('{Enter}');
+      await expect.element(editor).not.toHaveTextContent('@bob');
+    }
+  );
+
+  it('ignores an older search response and keeps the picker closed after Escape', async () => {
+    const { requests, searchMembers } = directory();
+    render(MarkdownEditorField, {
+      editorKind: 'markdown',
+      label: 'Notice',
+      placeholder: 'Write a notice',
+      mentions: { members: [], searchMembers }
+    });
+    const editor = page.getByRole('textbox', { name: 'Write a notice', exact: true });
+    await editor.fill('@b');
+    await expect.poll(() => searchMembers.mock.calls.length).toBe(1);
+    await editor.fill('@bo');
+    await expect.poll(() => searchMembers.mock.calls.length).toBe(2);
+    requests.get('bo')!([bob]);
+    await expect.element(page.getByTestId('mention-autocomplete')).toHaveTextContent('Bob Example');
+    requests.get('b')!([{ ...bob, id: 'old', displayName: 'Old result' }]);
+    await expect
+      .element(page.getByTestId('mention-autocomplete'))
+      .not.toHaveTextContent('Old result');
+    await userEvent.keyboard('{Escape}');
+    await expect.element(page.getByTestId('mention-autocomplete')).not.toBeInTheDocument();
+  });
+});

@@ -6,10 +6,11 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/chattocorp/chatto/cli/internal/readmodel"
+
 	"github.com/stretchr/testify/require"
 
 	"github.com/chattocorp/chatto/cli/internal/evtstream"
-	evtv1 "github.com/chattocorp/chatto/cli/internal/pb/chatto/core/evt/v1"
 )
 
 // newRoomManagerForTest creates an account with room.manage on roomID and
@@ -25,7 +26,7 @@ func newRoomManagerForTest(t *testing.T, ctx context.Context, c *ChattoCore, log
 
 // setRoomUniversalForTest changes the universal flag through the production
 // room command path. actorID must hold room.manage on roomID.
-func setRoomUniversalForTest(t *testing.T, ctx context.Context, c *ChattoCore, actorID, roomID string, universal bool) *evtv1.Room {
+func setRoomUniversalForTest(t *testing.T, ctx context.Context, c *ChattoCore, actorID, roomID string, universal bool) *readmodel.Room {
 	t.Helper()
 	room, err := c.RoomCommands().UpdateRoom(ctx, RoomUpdateInput{ActorID: actorID, RoomID: roomID, Universal: &universal})
 	require.NoError(t, err)
@@ -33,8 +34,6 @@ func setRoomUniversalForTest(t *testing.T, ctx context.Context, c *ChattoCore, a
 }
 
 func TestRoomCommandModelAuthorization(t *testing.T) {
-	t.Parallel()
-
 	core, _ := setupTestCore(t)
 	ctx := testContext(t)
 	commands := core.RoomCommands()
@@ -208,8 +207,6 @@ func TestRoomCommandModelAuthorization(t *testing.T) {
 }
 
 func TestRoomCommandModelManageRoomMembers(t *testing.T) {
-	t.Parallel()
-
 	core, _ := setupTestCore(t)
 	ctx := testContext(t)
 	commands := core.RoomCommands()
@@ -327,8 +324,6 @@ func TestRoomCommandModelManageRoomMembers(t *testing.T) {
 }
 
 func TestRoomCommandModelManageRoomMembersRejectsInvalidTargets(t *testing.T) {
-	t.Parallel()
-
 	core, _ := setupTestCore(t)
 	ctx := testContext(t)
 	commands := core.RoomCommands()
@@ -421,8 +416,6 @@ func TestRoomCommandModelManageRoomMembersRejectsInvalidTargets(t *testing.T) {
 }
 
 func TestBotOwnerRoomMembership(t *testing.T) {
-	t.Parallel()
-
 	c, _ := setupTestCore(t)
 	ctx := testContext(t)
 	owner, err := c.CreateUser(ctx, SystemActorID, "membership-owner", "Membership Owner", "password")
@@ -566,8 +559,6 @@ func TestBotOwnerRoomMembership(t *testing.T) {
 }
 
 func TestBotManagerMembershipAndAuthorizationRetry(t *testing.T) {
-	t.Parallel()
-
 	c, _ := setupTestCore(t)
 	ctx := testContext(t)
 	owner, err := c.CreateUser(ctx, SystemActorID, "retry-owner", "Owner", "password")
@@ -611,8 +602,6 @@ func TestBotManagerMembershipAndAuthorizationRetry(t *testing.T) {
 }
 
 func TestRoomRemovalRejectsUniversalChangeDuringRetry(t *testing.T) {
-	t.Parallel()
-
 	c, _ := setupTestCore(t)
 	ctx := testContext(t)
 	moderator, err := c.CreateUser(ctx, SystemActorID, "removal-race-moderator", "Moderator", "password")
@@ -641,8 +630,6 @@ func TestRoomRemovalRejectsUniversalChangeDuringRetry(t *testing.T) {
 }
 
 func TestAccountMembershipManagerOverridesJoinPermission(t *testing.T) {
-	t.Parallel()
-
 	for _, authority := range []Permission{PermUserManageAccounts, PermRoomManage} {
 		for _, botTarget := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/bot=%t", authority, botTarget), func(t *testing.T) {

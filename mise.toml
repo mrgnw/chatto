@@ -13,12 +13,14 @@ task.source_freshness_hash_contents = true
 frontend_build_environment = "{{ env.CHATTO_BUILD_VERSION | default(value='') | hash(len=16) }}-{{ env.CHATTO_FRONTEND_PRECOMPRESS | default(value='') | hash(len=16) }}-{{ env.NODE_OPTIONS | default(value='') | hash(len=16) }}"
 
 [tools]
+"github:chattocorp/sweet-release" = "sweet@0.3.0"
 actionlint = "1.7.12"
 "aqua:koalaman/shellcheck" = "0.11.0"
 "aqua:axllent/mailpit" = "1.30.6"
-buf = "latest"
+buf = "1.75.0"
 go = "1.27.3"
-goreleaser = "latest"
+# Keep the release workflow's GoReleaser action on the same version.
+goreleaser = "2.19.0"
 # Includes the Brotli decoder fix for CVE-2026-111497.
 node = "24.22.1"
 pnpm = "11.25.0"
@@ -26,6 +28,8 @@ uv = "0.11.30"
 
 [env]
 _.file = '.env'
+# Share Go build-cache entries across checkout paths; preserve incoming flags.
+GOFLAGS = "{{env.GOFLAGS | default(value='')}} -trimpath"
 CHATTO_DEVELOPMENT_VERSION = "0.5.0-dev"
 # The development stack uses the workspace port block. The base is
 # `CONDUCTOR_PORT`, or 4000 outside Conductor. Conductor gives each workspace
@@ -138,7 +142,7 @@ env.SHARP_IGNORE_GLOBAL_LIBVIPS = "1"
 run = "pnpm install"
 # package.json also contains app metadata and scripts; the lockfile is the
 # dependency-resolution input that should trigger installs.
-sources = ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", ".npmrc", "apps/*/package.json", "examples/*/package.json", "packages/*/package.json"]
+sources = ["package.json", "pnpm-lock.yaml", "pnpm-workspace.yaml", ".npmrc", "apps/*/package.json", "examples/*/package.json", "packages/*/package.json", "ci/package.json"]
 outputs = ["node_modules/.modules.yaml"]
 
 [tasks.deps]
@@ -147,7 +151,10 @@ run = { task = "deps-*" }
 
 [tasks.setup-cli]
 description = "Set up the CLI module"
-depends = ["deps-cli", "sync-cli-legal"]
+# Builds and tests download the modules they need. Prefetching the complete
+# dependency graph also downloads unused tool dependencies in workspace mode.
+# Keep deps-cli available for explicit prefetching, such as offline work.
+depends = ["sync-cli-legal"]
 
 [tasks.setup-appconfig]
 description = "Set up the application configuration module"
@@ -207,6 +214,14 @@ run = "node --test tools/release-policy.test.mjs"
 description = "Validate draft interchange schemas and synthetic conformance fixtures"
 run = "uv run --script tools/test_interchange.py"
 
+[tasks.test-slack]
+description = "Test Slack conversion and legacy import with synthetic exports"
+depends = ["setup-frontend"]
+run = [
+    "uv run --with 'jsonschema[format]==4.26.0' python -B -m unittest discover -s tools/slack -p 'test_slack*.py'",
+    "pnpm --dir apps/frontend exec tsx ../../tools/slack/test-slack-markdown.mjs",
+]
+
 # =============================================================================
 # Code Generation
 # =============================================================================
@@ -235,7 +250,7 @@ run = [
 ]
 
 [tasks.codegen-emoji]
-description = "Generate Go emoji map from gemoji npm package"
+description = "Generate server, client, and converter emoji maps from gemoji and Unicode data"
 depends = ["setup-frontend"]
 run = "node tools/gen-emoji-map.mjs"
 
@@ -282,7 +297,7 @@ run = "pnpm build"
 [tasks.desktop-run-dev]
 description = "Build and open Chatto Desktop Dev on macOS"
 depends = ["desktop-build-dev"]
-run = 'open "apps/desktop/dist/Chatto Desktop Dev.app"'
+run = 'open "apps/desktop/dist/Chatto Dev.app"'
 
 [tasks.desktop-video-benchmark]
 description = "Compare macOS hardware encoder settings locally (pass --output <new-directory>)"
@@ -673,6 +688,8 @@ exec mise x "$CHATTO_DEV_LIVEKIT_SERVER" -- \
 [tasks.dev-stack-authling]
 hide = true
 env = {
+  AUTHLING_BOOTSTRAP_ENABLED = "true",
+  AUTHLING_ADMIN_EMAILS = "{{env.AUTHLING_ADMIN_EMAILS | default(value='alice@alice.com')}}",
   AUTHLING_HTTP_BIND_ADDRESS = "127.0.0.1:{{env.CHATTO_DEV_AUTHLING_PORT}}",
   AUTHLING_AUTHENTICATION_PASSWORD_MINIMUM_LENGTH = "10",
   AUTHLING_NATS_REPLICAS = "1",
@@ -698,7 +715,7 @@ config_path="$data_root/authling.toml"
 state_dir="$data_root/port-$CHATTO_DEV_AUTHLING_PORT"
 mkdir -p "$state_dir/nats"
 cd authling
-mise build
+mise build-dev
 cp authling.toml "$config_path"
 cat >>"$config_path" <<TOML
 
@@ -711,7 +728,7 @@ TOML
 export AUTHLING_HTTP_PUBLIC_URL="$CHATTO_DEV_AUTHLING_URL"
 export AUTHLING_NATS_EMBEDDED_DATA_DIR="$state_dir/nats"
 echo "Authling: $AUTHLING_HTTP_PUBLIC_URL"
-exec bin/authling run --config "$config_path"
+exec bin/authling-dev run --config "$config_path"
 '''
 
 [tasks.dev-stack-runling-bot]
@@ -764,7 +781,7 @@ env = {
   CHATTO_BOOTSTRAP_BOTS_0_API_KEY_NAME = "Local development",
   CHATTO_BOOTSTRAP_BOTS_0_OUTBOUND_WEBHOOK_URL = "http://localhost:{{env.CHATTO_DEV_RUNLING_PORT}}/api/runs/start/chatto",
   CHATTO_BOOTSTRAP_BOTS_0_CREDENTIAL_FILE = "{{env.CHATTO_DEV_DATA_ROOT}}/bootstrap/test_bot.key",
-  CHATTO_BOOTSTRAP_BOTS_0_PERMISSIONS = "room.join,room.list,message.read,message.post-in-thread",
+  CHATTO_BOOTSTRAP_BOTS_0_PERMISSIONS = "message.read-interactions,message.post-in-interactions,message.react,message.attach",
   CHATTO_BOOTSTRAP_BOTS_0_ROOMS = "general",
 }
 run = "exec bin/chatto"
@@ -780,6 +797,15 @@ dir = "cli"
 run = [
     "go test -trimpath ./internal/core -run '^$' -bench '^BenchmarkProjectionReplay$' -benchmem -count=${CHATTO_BENCH_COUNT:-5}",
     "go test -trimpath ./internal/core -run '^$' -bench '^BenchmarkProjectionRetainedHeap$' -benchmem -benchtime=1x -count=${CHATTO_BENCH_COUNT:-5}",
+]
+
+[tasks.bench-import]
+description = "Measure fresh synthetic imports through the Operator API"
+depends = ["setup-cli"]
+dir = "cli"
+run = [
+    "go test -trimpath ./cmd -run '^$' -bench '^BenchmarkOperatorImport$' -benchtime=1x -count=${CHATTO_BENCH_COUNT:-3} -timeout=20m",
+    "go test -trimpath ./cmd -run '^$' -bench '^BenchmarkOperatorImportJournal$' -benchtime=1000x -count=${CHATTO_BENCH_COUNT:-3} -timeout=2m",
 ]
 
 [tasks.bench-projections-profile]
@@ -810,7 +836,7 @@ depends = ["setup-cli", "build-frontend"]
 dir = "cli"
 run = [
     "node ../tools/dev-seed-smoke.mjs",
-    "go test -trimpath -p ${CHATTO_GO_TEST_P:-4} -tags test_endpoints ./...",
+    "go test -trimpath -shuffle=${CHATTO_GO_TEST_SHUFFLE:-on} -tags test_endpoints ./...",
 ]
 # Go builds the cli module in workspace mode with the shared pkg/* modules as
 # local sources, and selects dependency versions across every workspace
@@ -831,6 +857,20 @@ sources = [
     "../mise.toml",
     "../tools/dev-seed-smoke.mjs",
 ]
+
+[tasks.test-cli-stability]
+description = "Repeat shuffled CLI service tests with the race detector"
+depends = ["setup-cli"]
+dir = "cli"
+env = { GOMAXPROCS = "4" }
+# Keep four Go scheduler threads per package, with one test at a time inside
+# each binary. Let Go run different packages concurrently. Do not cache this
+# task: each invocation must exercise the workers and cleanup again.
+run = "bash ../tools/test-cli-stability.sh"
+
+[tasks.test-cli-stability-runner]
+description = "Check stability-test budgets, flags, and failure propagation"
+run = "node --test tools/test-cli-stability.test.mjs"
 
 [tasks.test-appconfig]
 description = "Run application configuration tests standalone and in the repository workspace"
@@ -903,7 +943,7 @@ sources = [
 ]
 
 [tasks.knip]
-description = "Find unused frontend/docs files, dependencies, and exports"
+description = "Check root pnpm workspace files, dependencies, and duplicate exports"
 depends = ["setup-frontend"]
 run = "pnpm knip"
 
@@ -985,6 +1025,19 @@ run = [
     "bash tools/test-paseo-dev.sh",
 ]
 
+[tasks.test-repo-tooling]
+description = "Test repository checks, release policy, and development tooling"
+depends = ["setup-frontend"]
+tools = { "github:traefik/traefik" = "3.7.14" }
+# Discover new Node tooling tests without another local or CI file list.
+# Run files serially so lifecycle fixtures do not compete for resources.
+run = [
+    "node --test --test-concurrency=1 tools/*.test.mjs",
+    "bash tools/test-paseo-dev.sh",
+    { task = "test-interchange" },
+    { task = "test-slack" },
+]
+
 [tasks.test-chatto-build]
 description = "Check that unchanged Chatto builds skip and missing assets are restored"
 run = "bash tools/test-chatto-build.sh"
@@ -1005,7 +1058,7 @@ depends = ["setup-frontend"]
 run = "pnpm run check"
 
 [tasks.test-workspace]
-description = "Run all pnpm workspace package tests"
+description = "Run pnpm workspace package tests except local experiments"
 depends = ["setup-frontend"]
 run = "pnpm test"
 
@@ -1048,7 +1101,7 @@ run = [
     { task = "test-cli" },
     { task = "test-desktop" },
     { task = "test-chatto-build" },
-    { task = "test-dev-tooling" },
+    { task = "test-repo-tooling" },
     { task = "test-workspace" },
     { task = "test-e2e" },
 ]
@@ -1058,14 +1111,27 @@ run = [
 # =============================================================================
 
 [tasks.clean]
-description = "Clean all build artifacts"
+description = "Clean Chatto and root pnpm workspace outputs; keep data and native build caches"
+# Use explicit paths: committed generated source, dependency caches, captures,
+# and runtime state must survive. Authling owns its separate clean task.
 run = [
-    "rm -rf cli/bin/*",
+    "rm -rf dist cli/bin cli/chatto",
     "rm -rf cli/cmd/embedded",
-    "rm -rf cli/internal/http_server/.client",
-    "rm -rf apps/frontend/build",
+    # The embedding directory contains a tracked placeholder, not only output.
+    "if [ -d cli/internal/http_server/.client ]; then find cli/internal/http_server/.client -mindepth 1 -maxdepth 1 ! -name .gitkeep -exec rm -rf {} +; fi",
+    "rm -rf apps/frontend/build apps/frontend/.svelte-kit apps/frontend/storybook-static",
+    "rm -rf apps/frontend/e2e/fixtures/bin apps/frontend/e2e/fixtures/chatto-e2e-server",
+    "rm -rf apps/docs-website/dist apps/docs-website/.astro",
     "rm -rf apps/desktop/dist",
+    "rm -rf apps/mobile/www apps/mobile/ios/App/App/public",
+    "rm -f apps/mobile/ios/App/App/capacitor.config.json apps/mobile/ios/App/App/config.xml",
+    "rm -rf packages/chatto-client/dist packages/translatto/dist packages/runling/dist packages/runling/.svelte-kit",
+    "rm -rf .context/build-frontend",
 ]
+
+[tasks.test-clean]
+description = "Check clean-task output removal and preservation in isolated fixtures"
+run = "node --test tools/clean.test.mjs"
 
 [tasks.reset]
 description = "Reset the development data of Chatto and Authling"

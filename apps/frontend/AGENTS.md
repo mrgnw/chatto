@@ -14,6 +14,25 @@ Do not generate playground links for code written into this repository.
 
 ## Frontend Review
 
+**Inset Frame** is the canonical name for the raised rim and recessed content
+used by menus, palettes, dialog trays, and previews. See `docs/GLOSSARY.md` at the repository
+root and **Inset Frame** in `DESIGN_SYSTEM.md`. `inset-frame` and `inset-content`
+own the shared geometry and finish. Menu and preview utilities compose them;
+do not copy their border, radius, fill, or lighting into a feature component.
+Use `ContextMenu`/`MenuSection` for menu behavior and preview utilities for
+content. Keep both in the **UI/Inset Frame** Storybook comparison when changing
+the shared treatment.
+
+For images, files, embeds, composer thumbnails, and link hover cards, use the
+preview primitives in `src/app.css`. Read the **Preview surfaces** section in
+`DESIGN_SYSTEM.md` and the **UI/Preview frames** Storybook collection before
+adding a preview surface. Use `preview-frame` for the outer frame,
+`preview-content` for inset content, and `preview-thumbnail` for compact media.
+Do not introduce a separate border, outline, or card recipe for these surfaces.
+Keep native link/button semantics, media sizing, consent, loading, and actions
+with their existing owners. Full-size viewers and identity avatars are separate
+primitives. The design-system check rejects the retired `embed-frame` utility.
+
 Use [chatto-frontend-review](../../.agents/skills/chatto-frontend-review/SKILL.md)
 for every review of frontend code, including self-review before completing a
 change. It owns the review rules for side effects, reactivity, and lifecycle
@@ -222,6 +241,15 @@ behavior. Apply those rules when choosing an implementation too.
 - Prefer native browser scrolling for scrollable regions and galleries; do not
   intercept wheel, touch, or pointer scrolling unless the interaction is
   explicitly custom and approved.
+- Scrollable content must use the shared edge gradients. Use `ScrollFader` for
+  Svelte viewports. Generated Markdown code blocks must use the same
+  `scroll-edge-fade` styling and `trackScrollEdges` tracking. This includes
+  Source panels and horizontally scrolling ANSI output. Show fades only at
+  edges with more content, match the owning surface, and keep headers clear.
+- Composer code blocks must never scroll internally. Expand them to fit their
+  content and wrap long lines without changing the source. The composer owns
+  scrolling and its edge fades; do not add a nested code viewport.
+  In the visual composer, keep code-block headers limited to the language selector.
 - App-wide pan gestures must yield to horizontal scrollers, form and media
   controls, custom drag surfaces, and browser top-layer UI such as dialogs,
   popovers, and fullscreen elements. Mark custom surfaces with the gesture's
@@ -229,6 +257,12 @@ behavior. Apply those rules when choosing an implementation too.
 - Do not double-nest `Panel`.
 - `PaneHeader` actions are icon affordances. Put primary actions such as Save,
   Cancel, and Create in the page body or form area.
+- For a detail page with navigation in the sidebar, show its parent-route
+  `PaneHeader` back link in the narrow drawer layout only. Use
+  `sidebarNav.isMobile` to match the shared sidebar breakpoint, including narrow
+  desktop windows. Omit the link when the sidebar and content are side by side.
+  Check both layouts and click the narrow-layout back link before completing
+  the change. Do not remove the link from both layouts to fix the desktop view.
 - Use forms for input groups with submit buttons: real `<form>`, submit button,
   native validation, and Enter-to-submit.
 - Keep modal footer actions visible, horizontal, and `justify-end gap-2`.

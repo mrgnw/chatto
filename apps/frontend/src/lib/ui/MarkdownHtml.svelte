@@ -13,18 +13,43 @@ targets are unique to each component, including when callers reuse rendered HTML
 -->
 <script lang="ts">
   import { m } from '$lib/i18n/messages';
-  import { trustedMarkdownHtml } from '$lib/security/trustedHtml';
+  import { trustedMarkdownHtml, parseTrustedMarkdownHtml } from '$lib/security/trustedHtml';
+  import { renderArtifactFallback } from '$lib/markdown';
   import { toast } from '$lib/ui/toast';
   import { handleRenderedLinkClick } from '$lib/navigation/renderedLink';
+  import { attachCodeFrames } from '$lib/markdownArtifacts';
+  import { attachCodeScrollFades } from '$lib/markdownCodeScroll';
+  import type { Attachment } from 'svelte/attachments';
+  import { CopyFeedback } from '$lib/dom/actionFeedback';
+  const feedback = new CopyFeedback();
 
   let {
-    html
+    html,
+    artifactOwner,
+    enhanceLink
   }: {
     html: string;
+    /** Loaded message identity; images and layouts can survive virtualized row remounts. */
+    artifactOwner?: object;
+    /** Optional message-owned enhancement; its lifetime follows this rendered HTML. */
+    enhanceLink?: Attachment<HTMLAnchorElement>;
   } = $props();
 
   const footnoteScope = $props.id();
-  const trusted = $derived(trustedMarkdownHtml(scopeFootnotes(html)));
+  // Parent metadata updates can invalidate prop getters while their values stay
+  // equal. Compare the values before creating another artifact attachment.
+  const markup = $derived(html);
+  const previewOwner = $derived(artifactOwner);
+  const trusted = $derived(trustedMarkdownHtml(scopeFootnotes(markup)));
+
+  /** Keep failure markup in the same audited sink as the initial Markdown. */
+  function showArtifactSource(frame: HTMLElement, source: string, language: string) {
+    const fallback = renderArtifactFallback(source, language);
+    frame.replaceChildren(...parseTrustedMarkdownHtml(fallback).body.childNodes);
+    frame.dataset.presentation = 'code';
+    delete frame.dataset.artifactSource;
+    return attachCodeScrollFades(markup)(frame);
+  }
 
   /** Qualifies only the numeric footnote attributes emitted by markdown-it. */
   function scopeFootnotes(value: string): string {
@@ -62,11 +87,15 @@ targets are unique to each component, including when callers reuse rendered HTML
 
     event.preventDefault();
     event.stopPropagation();
-    const code = button.closest('pre')?.getAttribute('data-copy-source');
+    const code = button
+      .closest('.markdown-code-frame')
+      ?.querySelector('[data-copy-source]')
+      ?.getAttribute('data-copy-source');
     if (code === null || code === undefined) return;
 
     try {
       await navigator.clipboard.writeText(code);
+      if (button.isConnected) feedback.show(button, m('common.copied_to_clipboard'));
       toast.success(m('common.copied_to_clipboard'));
     } catch {
       toast.error(m('room.message.actions.copy_text_failed'));
@@ -76,27 +105,39 @@ targets are unique to each component, including when callers reuse rendered HTML
   // Markdown actions come from the audited HTML renderer, so they use one
   // delegated listener on this component's DOM root.
   function attachMarkdownActions(element: HTMLDivElement) {
+    // Rerun after the HTML changes, and dispose mounted link content before replacement.
+    const linkCleanups =
+      enhanceLink && markup.includes('data-content-href=')
+        ? Array.from(
+            element.querySelectorAll<HTMLAnchorElement>('a[data-content-href]'),
+            enhanceLink
+          )
+        : [];
     element.addEventListener('click', handleClick);
-    const handleAuxClick = (event: MouseEvent) => {
-      if (event.button !== 1 || !(event.target instanceof Element)) return;
-      const anchor = event.target.closest('a');
-      if (
-        anchor?.href &&
-        !anchor.closest('.footnote-ref') &&
-        !anchor.classList.contains('footnote-backref')
-      ) {
-        handleRenderedLinkClick(event, anchor.dataset.contentHref ?? anchor.href);
+    // Block the message row's long-press/selection gestures, while letting
+    // pointer events reach document-level outside-press dismissal handlers.
+    const gestures = ['mousedown', 'mouseup', 'touchstart', 'touchend'] as const;
+    const consumeControlGesture = (event: Event) => {
+      if (event.target instanceof Element && event.target.closest('.markdown-code-header button')) {
+        event.stopPropagation();
       }
     };
-    element.addEventListener('auxclick', handleAuxClick);
+    for (const type of gestures) element.addEventListener(type, consumeControlGesture);
     return () => {
+      for (const cleanup of linkCleanups) cleanup?.();
+      feedback.dispose();
       element.removeEventListener('click', handleClick);
-      element.removeEventListener('auxclick', handleAuxClick);
+      for (const type of gestures) element.removeEventListener(type, consumeControlGesture);
     };
   }
 </script>
 
-<div class="markdown-html contents" {@attach attachMarkdownActions}>
+<div
+  class="markdown-html contents"
+  {@attach attachMarkdownActions}
+  {@attach attachCodeFrames(markup, footnoteScope, showArtifactSource, previewOwner)}
+  {@attach attachCodeScrollFades(markup)}
+>
   <!-- eslint-disable-next-line svelte/no-at-html-tags -- rendered markdown from `$lib/markdown`; see component docs above -->
   {@html trusted}
 </div>

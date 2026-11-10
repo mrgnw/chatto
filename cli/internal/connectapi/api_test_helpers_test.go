@@ -11,6 +11,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chattocorp/chatto/cli/internal/readmodel"
+
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 
@@ -34,11 +36,11 @@ func requireConnectCode(t testing.TB, err error, want connect.Code) {
 	}
 }
 
-func withCaller(ctx context.Context, user *evtv1.User) context.Context {
+func withCaller(ctx context.Context, user *readmodel.User) context.Context {
 	return authn.SetInfo(ctx, Caller{UserID: user.Id})
 }
 
-func withBearerCredential(ctx context.Context, user *evtv1.User, token string) context.Context {
+func withBearerCredential(ctx context.Context, user *readmodel.User, token string) context.Context {
 	ctx = withCaller(ctx, user)
 	return authctx.WithCredential(ctx, authctx.RuntimeCredential{
 		Kind:   authctx.RuntimeCredentialKindBearerToken,
@@ -47,7 +49,7 @@ func withBearerCredential(ctx context.Context, user *evtv1.User, token string) c
 	})
 }
 
-func withArmedBearerCredential(ctx context.Context, user *evtv1.User, token string) context.Context {
+func withArmedBearerCredential(ctx context.Context, user *readmodel.User, token string) context.Context {
 	ctx = withCaller(ctx, user)
 	return authctx.WithCredential(ctx, authctx.RuntimeCredential{
 		Kind:                    authctx.RuntimeCredentialKindBearerToken,
@@ -105,7 +107,7 @@ type connectAPITestEnv struct {
 	account              *accountService
 	adminDiagnostics     *adminDiagnosticsService
 	adminEventLog        *adminEventLogService
-	adminInviteLinks     *adminInviteLinkService
+	adminInvitationCodes *adminInvitationCodeService
 	adminOAuthClients    *adminOAuthClientService
 	adminLayout          *adminRoomLayoutService
 	adminUsers           *adminUserManagementService
@@ -127,7 +129,7 @@ type connectAPITestEnv struct {
 	users                *userService
 	viewerService        *viewerService
 	voice                *voiceCallService
-	viewer               *evtv1.User
+	viewer               *readmodel.User
 }
 
 func newConnectAPITestEnv(t *testing.T) *connectAPITestEnv {
@@ -137,6 +139,10 @@ func newConnectAPITestEnv(t *testing.T) *connectAPITestEnv {
 
 // Larger fixtures can select a bounded lifecycle that also fits race-enabled runs.
 func newConnectAPITestEnvWithTimeout(t *testing.T, timeout time.Duration) *connectAPITestEnv {
+	return newConnectAPITestEnvWithAuth(t, timeout, config.AuthConfig{})
+}
+
+func newConnectAPITestEnvWithAuth(t *testing.T, timeout time.Duration, auth config.AuthConfig) *connectAPITestEnv {
 	t.Helper()
 
 	// Each environment owns its broker and event log. A shared broker reset
@@ -149,6 +155,7 @@ func newConnectAPITestEnvWithTimeout(t *testing.T, timeout time.Duration) *conne
 	t.Cleanup(cancel)
 
 	c, err := core.NewChattoCore(ctx, nc, config.CoreConfig{
+		AuthProviders: auth.Providers,
 		SecretKey:     "test-core-secret",
 		ServerOrigins: []string{"https://self.example"},
 		Assets: config.AssetsConfig{
@@ -164,7 +171,7 @@ func newConnectAPITestEnvWithTimeout(t *testing.T, timeout time.Duration) *conne
 	if err != nil {
 		t.Fatalf("CreateUser viewer: %v", err)
 	}
-	api := New(c, config.ChattoConfig{}, "test")
+	api := New(c, config.ChattoConfig{Auth: auth}, "test")
 	return &connectAPITestEnv{
 		ctx:                  ctx,
 		core:                 c,
@@ -173,7 +180,7 @@ func newConnectAPITestEnvWithTimeout(t *testing.T, timeout time.Duration) *conne
 		account:              &accountService{api: api},
 		adminDiagnostics:     &adminDiagnosticsService{api: api},
 		adminEventLog:        &adminEventLogService{api: api},
-		adminInviteLinks:     &adminInviteLinkService{api: api},
+		adminInvitationCodes: &adminInvitationCodeService{api: api},
 		adminOAuthClients:    &adminOAuthClientService{api: api},
 		adminLayout:          &adminRoomLayoutService{api: api},
 		adminUsers:           &adminUserManagementService{api: api},
@@ -201,24 +208,7 @@ func newConnectAPITestEnvWithTimeout(t *testing.T, timeout time.Duration) *conne
 
 func startConnectAPITestCore(t *testing.T, c *core.ChattoCore) {
 	t.Helper()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- c.Run(ctx) }()
-	t.Cleanup(func() {
-		cancel()
-		select {
-		case <-done:
-		case <-time.After(5 * time.Second):
-			t.Fatal("core.Run did not stop within timeout")
-		}
-	})
-
-	bootCtx, bootCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer bootCancel()
-	if err := c.WaitForBoot(bootCtx); err != nil {
-		t.Fatalf("WaitForBoot: %v", err)
-	}
+	testutil.StartService(t, "ChattoCore", c.Run, c.WaitForBoot)
 }
 
 func apiCapabilityGranted(grants []*apiv1.CapabilityGrant, capability string) bool {
@@ -256,7 +246,7 @@ func apiPermissionGranted(grants []*apiv1.PermissionGrant, permission string) bo
 	return false
 }
 
-func (e *connectAPITestEnv) createJoinedRoom(name string) *evtv1.Room {
+func (e *connectAPITestEnv) createJoinedRoom(name string) *readmodel.Room {
 	room, err := e.core.CreateRoom(e.ctx, e.viewer.Id, core.KindChannel, "", name, "")
 	if err != nil {
 		panic(err)

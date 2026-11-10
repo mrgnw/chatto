@@ -24,6 +24,67 @@ signup, recovery, consent, account management, profile, password change, email
 change, and deletion. It retains the shared assets and home routes, OIDC
 fallback, and outer security and origin middleware.
 
+## Development bootstrap
+
+The Go `bootstrap` build tag includes the fixed Alice and Bob account fixtures.
+`bootstrap.enabled` or `AUTHLING_BOOTSTRAP_ENABLED` must also be true. Untagged
+configuration validation rejects enabling this setting before storage opens.
+The untagged startup hook also rejects it as a second check.
+
+After replay and issuer initialization, the tagged startup hook creates missing
+fixture emails through the account service before opening the HTTP listener.
+It uses the existing encrypted account events and registry OCC. Existing email
+claims are left unchanged, and concurrent claim conflicts do not overwrite an
+account. A bootstrap failure cancels and joins the running tasks before exit.
+Only a local copy of the account service uses a shorter password minimum for
+the fixed fixture password. The running signup policy is unchanged. Bootstrap
+does not send email, introduce resources, or add a persisted event variant.
+
+`mise build-dev` writes `bin/authling-dev`; the normal build remains
+`bin/authling`. Standalone `mise dev` and the repository's full development stack
+enable bootstrap and default Alice's email into the administrator override.
+The test and vet tasks check tagged and untagged builds, both standalone and in
+the repository workspace.
+
+## Administration
+
+The shared `internal/web/ui` templ package supplies headings, labeled fields,
+verification-code inputs, notices, native data tables, empty rows, status badges,
+and cursor navigation. Feature templates own data and validation. Semantic color
+tokens and shared styles live in the Tailwind component layer; these
+primitives add no browser scripts or external assets. The home route checks a
+present session cookie and redirects active sessions to `/account`. Missing or
+expired sessions redirect to `/login`; storage failures preserve the
+cookie and return an unavailable response. The static `/dev/ui` component preview
+is registered only in `bootstrap` builds and reads no account or workflow data.
+See the [design system](../design-system.md) for component and layout rules.
+
+`GET /admin` requires an active browser session and a current administrator
+check before it reads the directory. The check crosses the durable account
+tail and accepts the stored account flag or the current verified email claim
+matching `administration.admin_emails`. `AUTHLING_ADMIN_EMAILS` overrides that
+list. The check does not use privileges cached in a session. Missing storage
+state denies access. Staged email changes cannot grant the email override.
+
+The directory sorts opaque account IDs and decrypts only the selected page,
+with a maximum of 50 rows. Each protected read checks the account's durable
+boundary. Erased accounts are omitted; other read errors fail the page. The
+handler checks administrator access again before rendering. This page does not
+add external connections. Existing NATS connections supply account state; the
+browser loads assets from Authling's own origin.
+
+`AdministratorChangedEvent` records a replacement administrator flag on the
+existing account subject in `AUTHLING_EVT`. The account projection rejects a
+change for an absent or deleted account. The internal command uses account OCC
+and waits for both account and registry boundaries before retrying. This PoC
+exposes no HTTP or CLI flag mutation. Operator overrides do not append events.
+
+Historical accounts replay with the flag false. The new event variant requires
+all replicas to run a supporting binary before a stored flag is changed. Older
+binaries reject the unknown variant during replay; do not roll back after such
+an event has been written. Merely configuring or using the email override does
+not introduce this event. No stream, bucket, or subject family is added.
+
 ## Configuration
 
 The runtime reads `authling.toml` by default. `AUTHLING_*` environment variables
@@ -107,17 +168,20 @@ private-listener, storage-path, logging, and deployment policy.
 commands. The key bucket is a separate, exceptionally sensitive backup and
 restore boundary.
 
-Both KV buckets allow direct gets, so any replica can answer a plain `Get`. A
+The KV buckets allow direct gets, so any replica can answer a plain `Get`. A
 follower can lag behind a committed write and return an older revision or no
-entry. `storage.OpenStores` binds both buckets through
+entry. `storage.OpenStores` binds all buckets through
 `github.com/chattocorp/chatto/pkg/jetstreamutil`, so `Get` reads through the
 stream leader and observes every committed write. Watchers and key listings
 still read from any replica. The bucket's `Create` also checks for a delete
 marker on any replica. Revision-checked counter updates treat both JetStream
 conflict codes as a conflict and read the counter again: a replicated stream
 reports a conflict with a write in progress as a different code. Startup tries
-stream and bucket provisioning up to three times when JetStream reports a
-transient error, for example while a cluster elects a leader.
+stream and bucket provisioning with bounded exponential backoff and jitter
+when JetStream reports a transient error, for example while a cluster elects
+a leader. Each request has its own timeout. Cancellation stops retries, and
+permanent configuration or authentication errors fail startup. The HTTP
+listener starts only after initialization and replay complete.
 
 Credential provisioning writes an opaque operation record before creating its
 user and data keys, then removes the marker after the referencing event
@@ -140,6 +204,7 @@ token-safe vocabulary.
 |-------|---------|-----------|----------|
 | `AccountCreatedEvent` | `authling.evt.account.{accountId}` | Account | Opaque account ID, envelope creation time, and encrypted local credential fields including the preferred username |
 | `PasswordResetRequestedEvent` | `authling.evt.account.{accountId}` | Account | Opaque account and credential-event IDs; the envelope ID identifies the audit request |
+| `SiteSettingsChangedEvent` | `authling.evt.site-settings` | Site settings | Actor account ID, prior revision, public replacement name, description, and introduction; envelope records time and event ID |
 | `PasswordChangedEvent` | `authling.evt.account.{accountId}` | Account | Opaque account, credential-key, prior-credential, ceremony, and optional reset-request references plus the replacement encrypted password verifier |
 | `EmailChangeRequestedEvent` | `authling.evt.account.{accountId}` | Account | Opaque account and reauthenticated credential-event IDs |
 | `EmailChangedEvent` | `authling.evt.account.{accountId}` | Account | Opaque account, credential-key, request, and prior-credential references plus the replacement encrypted email |
@@ -254,18 +319,38 @@ Unversioned asset URLs require cache revalidation with an ETag. Missing files an
 unknown versions are not cached. HTML and authentication responses retain
 `Cache-Control: no-store`.
 
-The `site` configuration supplies a public name and optional description through
-TOML or environment variables. The name defaults to the configured public
-hostname, never a request header. Each HTTP handler attaches its resolved display
-settings to request context for the shared page layout. Transactional email
-workflows receive the same resolved name. Display text does not change issuer or
+The `site` configuration supplies default public name, description, and sign-in
+introduction through TOML or environment variables. The name defaults to the
+configured public hostname, never a request header. `internal/sitesettings`
+captures the settings subject tail and waits for its required in-memory
+projection before returning current values. Browser handlers attach these
+values to request context; email workflows resolve them before composition.
+Configuration defaults apply only before the first settings event.
+
+`GET /admin/appearance` and `POST /admin/appearance` require current administrator
+access. POST also requires a matching origin and a bounded form body. Save checks
+administrator access again, then appends a `SiteSettingsChangedEvent` with
+subject-level OCC. The event records actor ID, time, previous revision, and
+public replacement values in plaintext. Conflicts synchronize the projection again and
+preserve input without retrying the edit. Successful saves wait for local
+application. The projection validates the predecessor
+chain, envelope, and text constraints during live processing and cold replay.
+Settings history has no encryption-key dependency and remains after account
+erasure. No new storage resource or external connection is added.
+See [ADR-009](../adr/ADR-009-live-presentation-settings.md) for rollout rules.
+
+Display text does not change issuer or
 client identity. Forms use a compact layout; account settings use a wider layout
 with separate profile, security, connected-app, session, and deletion sections.
 See [FDR-014](../fdr/FDR-014-site-identity.md).
 
-The initial Content Security Policy prohibits scripts and third-party content.
-All essential future authentication interactions must continue to work through
-ordinary server-rendered links and forms.
+The Content Security Policy permits local scripts and prohibits third-party
+content, inline scripts, and eval. A locally bundled htmx module enhances ordinary
+links and ordinary sign-in by replacing the page body. Other forms and OAuth
+navigation remain native.
+History restores fetch fresh HTML without caching account pages in browser
+storage. All essential authentication interactions also work through ordinary
+server-rendered links and forms with JavaScript disabled. See ADR-003.
 
 `GET /signup` renders the email form. Three POST endpoints start a flow, verify
 its code, and complete account creation with a password. Unsafe requests reject
@@ -282,7 +367,7 @@ keyed attempt limit before checking the encrypted credential and creates a
 fresh browser session on success. `GET /account` requires that session, and
 same-origin `POST /logout` revokes it. Successful signup also starts a session.
 The host-only browser cookie carries only a random opaque bearer and is
-`HttpOnly`, `SameSite=Lax`, scoped to `/`, non-persistent, and secure outside
+`HttpOnly`, `SameSite=Lax`, scoped to `/`, persistent for 90 days, and secure outside
 the explicit loopback development mode.
 
 The `internal/runtimejson` codec encodes version-1 encrypted JSON envelopes
@@ -294,8 +379,8 @@ The codec clears temporary plaintext buffers before returning. Existing records
 remain readable, and old readers can read new records without migration.
 
 Session records are authenticated-encrypted in runtime state beneath
-HMAC-derived keys. They have a 24-hour absolute lifetime and a one-hour
-inactivity limit. Activity updates use OCC and never extend the absolute
+HMAC-derived keys. New sessions have a 90-day absolute lifetime and no separate
+inactivity limit. Existing records keep their stored expiry. Activity updates use OCC and never extend the absolute
 deadline. Each session records the account authentication version current at
 issuance. Password reset, signed-in password change, and verified email change
 advance that durable version, invalidating every older session across replicas
@@ -306,7 +391,9 @@ storage formats are unchanged; all replicas must run the fix to close the old
 session-creation path. Logout deletes the server record before clearing the
 cookie.
 
-`GET /account` also reads the current account's active sessions from the
+`GET /account` renders the profile summary. `GET /account/security` renders
+password and deletion actions. Each account section requires an active session.
+`GET /account/sessions` reads the current account's active sessions from the
 process-wide inventory. It renders lifecycle timestamps and identifies the
 current browser without collecting user agents, IP addresses, device names, or
 locations. Same-origin `POST /account/sessions/revoke` signs out one other
@@ -404,7 +491,7 @@ scopes. ID tokens retain authorized UserInfo claims. UserInfo uses the scopes
 stored in encrypted access-token state, never scopes from the HTTP request.
 Plaintext email is not added to events, projections, or token records.
 
-`GET /account` lists active OIDC grants separately from Authling browser
+`GET /account/apps` lists active OIDC grants separately from Authling browser
 sessions. Same-origin `POST /account/authorizations/revoke` authorizes the
 opaque grant ID under the current account and commits revocation. Revocation
 forces future authorization to ask again but does not terminate already issued

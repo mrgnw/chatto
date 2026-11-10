@@ -3,14 +3,60 @@ package core
 import (
 	"errors"
 	"strings"
+	"sync"
 	"testing"
+	"time"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/chattocorp/chatto/cli/internal/readmodel"
 
 	evtv1 "github.com/chattocorp/chatto/cli/internal/pb/chatto/core/evt/v1"
 )
 
-func TestRoomDirectoryReadModelVisibilityAndJoinGroup(t *testing.T) {
-	t.Parallel()
+func TestRoomDirectoryDMActivityLockOrder(t *testing.T) {
+	timeline, threads := NewRoomTimelineProjection(), NewThreadProjection()
+	facts := []*evtv1.Event{
+		roomCreatedEvent("DM", "", "", evtv1.RoomKind_ROOM_KIND_DM),
+		postedEvent(postedOpts{envelopeID: "ROOT", roomID: "DM", actorID: "AUTHOR", at: 1}),
+		postedEvent(postedOpts{envelopeID: "REPLY", roomID: "DM", actorID: "AUTHOR", inThread: "ROOT", at: 2}),
+	}
+	applyAll(t, timeline, facts)
+	applyAll(t, threads, facts)
+	rooms := &RoomModel{
+		timeline: detachedTestProjectionHandle(timeline),
+		threads:  detachedTestProjectionHandle(threads),
+	}
 
+	// While the timeline is unavailable, the activity read must already hold
+	// the thread read lock. The inverse order can deadlock with latestPostAt
+	// when writers wait on both projections.
+	timeline.Lock()
+	unlockTimeline := sync.OnceFunc(timeline.Unlock)
+	done := make(chan struct{})
+	var message, root time.Time
+	go func() {
+		message, root = rooms.lastReadablePostedMessageTimes("AUTHOR", "DM", false)
+		close(done)
+	}()
+	defer func() {
+		unlockTimeline()
+		<-done
+	}()
+	require.Eventually(t, func() bool {
+		if threads.TryLock() {
+			threads.Unlock()
+			return false
+		}
+		return true
+	}, 5*time.Second, time.Millisecond, "activity must acquire threads before waiting for the timeline")
+	unlockTimeline()
+	<-done
+	require.Equal(t, fixedTime(2), message)
+	require.Equal(t, fixedTime(1), root)
+}
+
+func TestRoomDirectoryReadModelVisibilityAndJoinGroup(t *testing.T) {
 	core, _ := setupTestCore(t)
 	ctx := testContext(t)
 	reads := core.RoomDirectoryReads()
@@ -110,8 +156,6 @@ func directoryRoomsContain(rooms []*DirectoryRoom, roomID string) bool {
 }
 
 func TestRoomDirectoryReadModelCanIncludeEmptyDMsForExhaustiveProjection(t *testing.T) {
-	t.Parallel()
-
 	chattoCore, _ := setupTestCore(t)
 	ctx := testContext(t)
 	actor, err := chattoCore.CreateUser(ctx, SystemActorID, "directory-empty-dm-actor", "Directory Empty DM Actor", "password")
@@ -145,15 +189,13 @@ func TestRoomDirectoryReadModelCanIncludeEmptyDMsForExhaustiveProjection(t *test
 }
 
 func TestRoomDirectoryReadModelSortsMemberDMsByActivityDespiteMessageReadDenial(t *testing.T) {
-	t.Parallel()
-
 	chattoCore, _ := setupTestCore(t)
 	ctx := testContext(t)
 	actor, err := chattoCore.CreateUser(ctx, SystemActorID, "directory-sort-actor", "Directory Sort Actor", "password")
 	if err != nil {
 		t.Fatalf("CreateUser actor: %v", err)
 	}
-	createDM := func(login string) (*evtv1.User, *evtv1.Room) {
+	createDM := func(login string) (*readmodel.User, *readmodel.Room) {
 		t.Helper()
 		other, err := chattoCore.CreateUser(ctx, SystemActorID, login, login, "password")
 		if err != nil {
@@ -194,8 +236,6 @@ func TestRoomDirectoryReadModelSortsMemberDMsByActivityDespiteMessageReadDenial(
 }
 
 func TestRoomDirectoryReadModelKeepsActiveDMsWhenMessageReadIsDenied(t *testing.T) {
-	t.Parallel()
-
 	chattoCore, _ := setupTestCore(t)
 	ctx := testContext(t)
 	actor, err := chattoCore.CreateUser(ctx, SystemActorID, "directory-no-read-actor", "Directory No Read Actor", "password")

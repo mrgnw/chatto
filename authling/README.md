@@ -31,11 +31,10 @@ The `build Authling image` workflow builds and checks Linux amd64 images for
 pull requests. Relevant changes on `main` and manual workflow runs also publish
 `ghcr.io/chattocorp/authling:<full-commit-sha>` when run from a branch.
 
-Merging Authling's Release Please PR creates an independent `authling/v<version>`
-tag. A tag push builds and publishes `ghcr.io/chattocorp/authling:<version>`;
+Merging Authling's Sweet release PR starts CI. Successful checks create its
+independent `authling/v<version>` tag. A tag push builds and publishes `ghcr.io/chattocorp/authling:<version>`;
 for example, `authling/v0.1.0-alpha.1` publishes `:0.1.0-alpha.1`. The workflow
-rejects a release tag that differs from `version.go` or the Release Please
-manifest, and checks the executable's version before publishing. Manual runs
+rejects a release tag that differs from `version.go` or `.sweet.yml`, and checks the executable's version before publishing. Manual runs
 on an Authling release tag use the same checks and versioned image name.
 Release versions can include a prerelease suffix, but not `+` build metadata.
 The workflow does not publish floating `latest` or `stable` tags.
@@ -53,6 +52,9 @@ This extends Go's process-wide trust store, including outbound HTTPS. Do not
 disable TLS verification. Authling starts its HTTP listener only after startup
 replay and issuer initialization finish. A TCP startup/readiness probe can
 check that milestone, but does not prove continuing NATS or JetStream health.
+Allow at least ten minutes for startup probes if the process must wait for
+JetStream recovery. Authling retries transient stream and bucket provisioning
+errors with bounded backoff; permanent configuration errors still fail startup.
 
 When the external account uses tiered JetStream quotas, provide an R1 tier for
 Authling's temporary ordered consumers and browser-session KV watcher, even
@@ -180,11 +182,40 @@ mise mailpit
 mise authling run
 ```
 
-Or run both development processes together:
+For development with ready-to-use accounts, run both processes together:
 
 ```sh
 mise dev
 ```
+
+This builds `bin/authling-dev` with the Go `bootstrap` tag and enables account
+bootstrap before HTTP starts. It creates these verified local accounts without
+sending verification email:
+
+| Account | Initial password | Development access |
+| --- | --- | --- |
+| `alice@alice.com` | `foobar123` | Administrator through the configured email override |
+| `bob@bob.com` | `foobar123` | Regular user |
+
+The repository's `mise dev-full` uses the same bootstrap. Existing accounts at
+these addresses keep their IDs, passwords, profiles, and stored administrator
+flags. A restart does not reset them. If a fixture account is deleted or its
+email changes, the missing fixture address is created again on the next start.
+Alice's administrator override is a development-task default; set
+`AUTHLING_ADMIN_EMAILS` to choose a different list.
+
+`mise build` and `mise authling run` use the untagged `bin/authling` and do not
+seed users. A tagged binary also needs `bootstrap.enabled = true` in TOML or
+`AUTHLING_BOOTSTRAP_ENABLED=true`; `mise dev` sets this automatically. Untagged
+binaries reject attempts to enable bootstrap. Only the compiled fixture path
+accepts the short initial password; signup and password changes retain the
+configured password policy. Development bootstrap does not send email or make
+other new external connections.
+
+Use only disposable development storage with the bootstrap enabled. Clearing
+that storage recreates the fixtures with new IDs and invalidates existing
+Chatto links to those identities. Browser tests keep their isolated accounts
+and use the untagged binary.
 
 The development configuration serves Authling at <http://localhost:8080>, with
 signup at <http://localhost:8080/signup>, login at
@@ -246,18 +277,24 @@ Configure the public site name separately from the Authling software name:
 [site]
 name = "chatto.id"
 description = "Your account for Chatto."
+introduction = "Welcome back. Sign in to continue."
 ```
 
-`AUTHLING_SITE_NAME` and `AUTHLING_SITE_DESCRIPTION` override these TOML values.
+`AUTHLING_SITE_NAME`, `AUTHLING_SITE_DESCRIPTION`, and
+`AUTHLING_SITE_INTRODUCTION` override these TOML defaults.
 The name appears in page headers, page titles, account messages, and transactional
-email subjects and bodies. The optional description appears on the home page and
-in page metadata. Values are plain text; HTML is escaped. Names allow up to 120
-Unicode characters and descriptions up to 500, with no control characters.
+email subjects and bodies. The optional description appears in page metadata.
+The root URL sends visitors to sign-in, or to their account if already signed in.
+Values are plain text; HTML is escaped. Names allow up to 120
+Unicode characters; descriptions and sign-in introductions allow up to 500
+each, with no control characters or line breaks.
 Leading and trailing spaces are removed.
 
 When the name is empty, the site uses the hostname from `http.public_url` (or the
 local listener default). An empty description is omitted. Request host headers
-do not set the display name. Restart Authling after changing these settings.
+do not set the display name. A blank introduction uses the standard sign-in copy.
+Restart Authling after changing these configuration defaults. Once an
+administrator saves Appearance, saved values take precedence over these defaults.
 Display settings do not change the issuer URL, account IDs, client names, SMTP
 sender address, or authentication policy. Set `smtp.from` separately to use your
 site's sender name and address.
@@ -265,6 +302,47 @@ site's sender name and address.
 Authling renders its user interface with templ. Vite compiles Tailwind CSS and
 locally packaged fonts and icons into assets that are embedded in the Go
 binary; Node.js is not needed to run the resulting executable.
+
+## Administration
+
+To give an existing or future account administrator access, configure its
+verified email address:
+
+```toml
+[administration]
+admin_emails = ["you@example.com"]
+```
+
+`AUTHLING_ADMIN_EMAILS` overrides this list with comma-separated addresses.
+Restart every replica after changing the configuration. Matching uses the same
+case-insensitive, whitespace-trimmed comparison as account login.
+
+Sign in normally, then select **Administration** in the account-page header or open
+`/admin`. The read-only directory shows up to 50 registered users per page,
+including their verified email, profile names, account ID, registration time,
+and administrator access source. Deleted accounts do not appear.
+
+A current verified address on the configured list always grants administrator
+access, independent of the account's stored administrator flag. The page marks
+this access as coming from server configuration. Changing away from the
+configured email removes this override; an account that later verifies that
+address receives it. Removing the configuration also removes the override.
+Neither action removes a separate stored administrator assignment. The override
+does not bypass login or account deletion.
+
+Select **Appearance** to edit the site name, description, and sign-in
+introduction.
+**Save changes** applies the text immediately and preserves it across restarts.
+Each save records the administrator, time, and replacement settings in the event
+history. A browser history viewer is not yet
+available.
+If another administrator has saved first, compare the saved settings before
+starting a new edit. Only public text belongs in these fields.
+
+Upgrade all replicas before using Appearance; older versions continue to use
+configuration defaults. The interface cannot edit users or administrator flags.
+Use the configured email list to enable access. Administration does not grant
+roles or permissions in connected applications.
 
 ## OpenID Connect
 

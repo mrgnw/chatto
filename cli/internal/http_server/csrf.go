@@ -45,6 +45,7 @@ func (s *HTTPServer) csrfMiddleware() gin.HandlerFunc {
 		if isSafeHTTPMethod(c.Request.Method) &&
 			s.hasCookieCredential(c) &&
 			c.Request.URL.Path != serverDiscoveryConnectPath &&
+			c.Request.URL.Path != serverFeaturesConnectPath &&
 			c.Request.URL.Path != serverDiscoveryWellKnownPath &&
 			!isImmutableFrontendAsset(c.Request.URL.Path) {
 			if err := s.ensureCSRFToken(c); err != nil {
@@ -102,7 +103,6 @@ func isCSRFExemptUnsafePath(path string) bool {
 	switch path {
 	case "/auth/login",
 		"/auth/browser/login",
-		"/auth/browser/session/migrate",
 		"/auth/browser/revoke-bearer-session",
 		"/auth/register",
 		"/auth/register/verify-code",

@@ -1,7 +1,7 @@
 /** Use real Pi session storage and context hooks to detect snapshot accumulation. */
 import { mkdir, mkdtemp, readFile, rm } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { expect, test } from 'vitest';
+import { expect, test, vi } from 'vitest';
 import {
   createAgentSession,
   DefaultResourceLoader,
@@ -25,7 +25,13 @@ test('fresh snapshots reach requests but never enter saved history across turns 
     });
     const model = runtime.getModel('anthropic', 'claude-sonnet-4-6');
     if (!model) throw new Error('Test requires the built-in model catalog');
-    const open = async (snapshot: ThreadContext) => {
+    const loadImages = vi.fn(async () => ({
+      images: [
+        { messageId: 'ordinary', attachmentId: 'image', data: 'AQID', mimeType: 'image/png' }
+      ],
+      imageNotes: []
+    }));
+    const open = async (snapshot: ThreadContext, vision = true) => {
       const settingsManager = SettingsManager.inMemory();
       const resourceLoader = new DefaultResourceLoader({
         cwd: directory,
@@ -36,14 +42,14 @@ test('fresh snapshots reach requests but never enter saved history across turns 
         noPromptTemplates: true,
         noThemes: true,
         noContextFiles: true,
-        extensionFactories: [threadContextExtension(snapshot)]
+        extensionFactories: [threadContextExtension(snapshot, loadImages)]
       });
       await resourceLoader.reload();
       return createAgentSession({
         cwd: directory,
         agentDir: directory,
         modelRuntime: runtime,
-        model,
+        model: vision ? model : { ...model, input: ['text'] },
         settingsManager,
         resourceLoader,
         tools: [],
@@ -54,6 +60,10 @@ test('fresh snapshots reach requests but never enter saved history across turns 
     manager.appendMessage({
       role: 'user',
       content: JSON.stringify({
+        initialMemory: {
+          documents: [{ id: 'memory', scope: 'global', body: 'initial-memory-fact' }],
+          truncated: false
+        },
         currentMessages: [
           { id: 'first', text: 'first addressed batch' },
           { id: 'unchanged', text: 'unchanged addressed message' },
@@ -64,25 +74,49 @@ test('fresh snapshots reach requests but never enter saved history across turns 
     });
     const first = await open({
       messages: [{ id: 'ordinary', author: 'human', text: 'snapshot version one' }],
-      memoryDocuments: { global: ['old-global-memory'], users: { human: ['old-user-memory'] } },
+      images: [
+        { messageId: 'ordinary', attachmentId: 'image', data: 'AQID', mimeType: 'image/png' }
+      ],
       olderContextOmitted: false
     });
     try {
       const request = await first.session.extensionRunner.emitContext(first.session.messages);
       expect(JSON.stringify(request)).toContain('snapshot version one');
-      expect(JSON.stringify(request)).toContain('old-global-memory');
-      expect(JSON.stringify(request)).toContain('old-user-memory');
-      expect(await readFile(file, 'utf8')).not.toContain('old-global-memory');
+      expect(JSON.stringify(request)).toContain('initial-memory-fact');
+      expect(JSON.stringify(request)).toContain('"type":"image"');
+      expect(await readFile(file, 'utf8')).not.toContain('AQID');
       expect(JSON.stringify(first.session.messages)).not.toContain('snapshot version one');
       expect(await readFile(file, 'utf8')).not.toContain('snapshot version one');
       // A repeated transform (such as a retry) starts from history, not the previous request copy.
       expect(await first.session.extensionRunner.emitContext(first.session.messages)).toEqual(
         request
       );
+      expect(loadImages).toHaveBeenCalledOnce();
     } finally {
       first.session.dispose();
     }
 
+    loadImages.mockClear();
+    const textOnly = await open(
+      {
+        messages: [],
+        olderContextOmitted: false,
+        images: [
+          { messageId: 'ordinary', attachmentId: 'image', data: 'AQID', mimeType: 'image/png' }
+        ]
+      },
+      false
+    );
+    try {
+      const request = JSON.stringify(
+        await textOnly.session.extensionRunner.emitContext(textOnly.session.messages)
+      );
+      expect(request).not.toContain('AQID');
+      expect(request).toContain('cannot read images');
+      expect(loadImages).not.toHaveBeenCalled();
+    } finally {
+      textOnly.session.dispose();
+    }
     const reopened = SessionManager.open(file, directory, directory);
     reopened.appendMessage({
       role: 'assistant',
@@ -103,11 +137,21 @@ test('fresh snapshots reach requests but never enter saved history across turns 
     });
     const secondEntry = reopened.appendMessage({
       role: 'user',
-      content: 'second addressed batch',
+      content: JSON.stringify({
+        currentMessages: [{ id: 'second', text: 'second addressed batch' }]
+      }),
       timestamp: Date.now()
     });
+    loadImages.mockResolvedValue({
+      images: ['second', 'first'].map((id) => ({
+        messageId: id,
+        attachmentId: `${id}-image`,
+        data: `${id}-pixels`,
+        mimeType: 'image/png'
+      })),
+      imageNotes: []
+    });
     const second = await open({
-      memoryDocuments: { global: ['new-global-memory'], users: { human: [] } },
       messages: [
         { id: 'ordinary', author: 'human', text: 'snapshot version two' },
         { id: 'first', text: 'edited first batch' },
@@ -120,10 +164,14 @@ test('fresh snapshots reach requests but never enter saved history across turns 
     try {
       const request = await second.session.extensionRunner.emitContext(second.session.messages);
       const text = JSON.stringify(request);
-      expect(text).toContain('new-global-memory');
-      expect(text).not.toContain('old-global-memory');
-      expect(text).not.toContain('old-user-memory');
-      expect(await readFile(file, 'utf8')).not.toContain('new-global-memory');
+      const userMessages = request.filter((message) => message.role === 'user');
+      expect(JSON.stringify(userMessages[0])).toContain('first-pixels');
+      expect(JSON.stringify(userMessages[0])).not.toContain('second-pixels');
+      expect(JSON.stringify(userMessages.at(-1))).toContain('second-pixels');
+      expect(JSON.stringify(userMessages.at(-1))).not.toContain('first-pixels');
+      expect(await readFile(file, 'utf8')).not.toContain('-pixels');
+      expect(text.match(/initial-memory-fact/g)).toHaveLength(1);
+      expect((await readFile(file, 'utf8')).match(/initial-memory-fact/g)).toHaveLength(1);
       expect(text).toContain('snapshot version two');
       expect(text).not.toContain('snapshot version one');
       expect(text.match(/snapshot version two/g)).toHaveLength(1);
@@ -157,6 +205,7 @@ test('fresh snapshots reach requests but never enter saved history across turns 
       const request = await third.session.extensionRunner.emitContext(third.session.messages);
       const text = JSON.stringify(request);
       expect(text).toContain('Earlier conversation summary');
+      expect(text).not.toContain('initial-memory-fact');
       expect(text.match(/edited first batch/g)).toHaveLength(1);
       expect(text.match(/Bot answer/g)).toHaveLength(1);
       expect(JSON.stringify(third.session.messages)).not.toContain('Bot answer');

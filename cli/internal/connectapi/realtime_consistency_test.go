@@ -12,10 +12,8 @@ import (
 )
 
 func TestRealtimeConsistencyInterceptorValidatesViewerBoundCursor(t *testing.T) {
-	t.Parallel()
-
 	env := newConnectAPITestEnv(t)
-	plan, err := env.core.PlanRealtimeReplay(env.ctx, env.viewer.Id, "")
+	plan, err := env.core.PlanRealtimeReplay(env.ctx, env.viewer.Id, "", nil)
 	if err != nil {
 		t.Fatalf("PlanRealtimeReplay: %v", err)
 	}
@@ -50,10 +48,8 @@ func TestRealtimeConsistencyInterceptorValidatesViewerBoundCursor(t *testing.T) 
 }
 
 func TestRealtimeConsistencyInterceptorDoesNotRunHandlerOnLagTimeout(t *testing.T) {
-	t.Parallel()
-
 	env := newConnectAPITestEnv(t)
-	plan, err := env.core.PlanRealtimeReplay(env.ctx, env.viewer.Id, "")
+	plan, err := env.core.PlanRealtimeReplay(env.ctx, env.viewer.Id, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

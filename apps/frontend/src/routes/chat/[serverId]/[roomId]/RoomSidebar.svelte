@@ -60,6 +60,10 @@ calls, and similar room-specific panels can plug into the same shell. See the
   import RoomFilesPanel from './RoomFilesPanel.svelte';
   import RoomSearchPanel from './RoomSearchPanel.svelte';
   import RoomInformationPanel from './RoomInformationPanel.svelte';
+  import type { RoomNoticeStore } from '@chatto/client/room/notice';
+  import type { MarkdownMentionOptions } from '$lib/components/composer/mentionOptions';
+
+  const paneId = $props.id();
 
   let {
     loading = false,
@@ -81,6 +85,9 @@ calls, and similar room-specific panels can plug into the same shell. See the
     onSearchFocused,
     filesStore,
     pinsStore,
+    noticeStore,
+    canManageNotice = false,
+    noticeMentions,
     livekitUrl,
     fileGroupingNow,
     onOpenFileMessage,
@@ -111,6 +118,9 @@ calls, and similar room-specific panels can plug into the same shell. See the
     onSearchFocused?: () => void;
     filesStore?: RoomFilesStore;
     pinsStore?: RoomPinsStore;
+    noticeStore?: RoomNoticeStore;
+    canManageNotice?: boolean;
+    noticeMentions?: MarkdownMentionOptions;
     livekitUrl?: string;
     fileGroupingNow?: Date;
     onOpenFileMessage?: (messageEventId: string, threadRootEventId: string | null) => void;
@@ -390,6 +400,17 @@ calls, and similar room-specific panels can plug into the same shell. See the
       // Fullscreen can be denied by browser or OS policy; the regular pane still works.
     }
   }
+
+  /** Exit the current overlay level before closing the room extras pane. */
+  function backFromOverlay(): void {
+    if (isCallFullscreen) {
+      void toggleCallFullscreen();
+    } else if (activeProfileUserId && onBackToMembers) {
+      onBackToMembers();
+    } else {
+      onClose?.();
+    }
+  }
 </script>
 
 <svelte:document
@@ -397,6 +418,7 @@ calls, and similar room-specific panels can plug into the same shell. See the
 />
 
 <aside
+  id={paneId}
   bind:this={sidebarElement}
   {@attach syncPresenceGrouping}
   class={[
@@ -410,6 +432,7 @@ calls, and similar room-specific panels can plug into the same shell. See the
 >
   {#if presentation === 'desktop' && !maximized && !isCallFullscreen}
     <ResizeHandle
+      controls={paneId}
       width={roomSidebarWidth.value}
       min={ROOM_SIDEBAR_MIN_WIDTH}
       max={ROOM_SIDEBAR_MAX_WIDTH}
@@ -421,8 +444,16 @@ calls, and similar room-specific panels can plug into the same shell. See the
   {/if}
   <PaneHeader
     {title}
-    onBack={activeProfileUserId ? onBackToMembers : undefined}
-    backLabel={m('room.sidebar.members')}
+    onBack={presentation === 'overlay'
+      ? backFromOverlay
+      : activeProfileUserId
+        ? onBackToMembers
+        : undefined}
+    backLabel={isCallFullscreen
+      ? m('voice.exit_fullscreen_call')
+      : activeProfileUserId && onBackToMembers
+        ? m('room.sidebar.members')
+        : m('room.sidebar.hide')}
   >
     {#snippet actions()}
       {#if showMaximizeButton && !isCallFullscreen}
@@ -440,12 +471,14 @@ calls, and similar room-specific panels can plug into the same shell. See the
           onclick={() => void toggleCallFullscreen()}
         />
       {/if}
-      <HeaderIconButton
-        icon="icon-[uil--times]"
-        label={isCallFullscreen ? m('voice.exit_fullscreen_call') : m('room.sidebar.hide')}
-        iconSize="lg"
-        onclick={() => (isCallFullscreen ? void toggleCallFullscreen() : onClose?.())}
-      />
+      {#if presentation === 'desktop'}
+        <HeaderIconButton
+          icon="icon-[uil--times]"
+          label={isCallFullscreen ? m('voice.exit_fullscreen_call') : m('room.sidebar.hide')}
+          iconSize="lg"
+          onclick={() => (isCallFullscreen ? void toggleCallFullscreen() : onClose?.())}
+        />
+      {/if}
     {/snippet}
   </PaneHeader>
 
@@ -546,6 +579,9 @@ calls, and similar room-specific panels can plug into the same shell. See the
       memberCount={membersStore.hasFirstPage ? memberCount : null}
       {isUniversal}
       {pinsStore}
+      {noticeStore}
+      {canManageNotice}
+      {noticeMentions}
       {onOpenPin}
     />
   {:else if activePanel === 'call'}

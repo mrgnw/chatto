@@ -1,8 +1,10 @@
 <!-- @component
-An image stage with local zoom and pan state. The parent keeps this component
-mounted when a signed image URL refreshes and remounts it for another image.
+Attachment viewer image stage with wheel/pinch zoom, bounded panning and Fit.
+Controls live in the viewer footer when one is provided through context.
 -->
 <script module lang="ts">
+  /** Allow shrinking below the fitted size without making the image disappear. */
+  const MIN_ZOOM = 0.25;
   /** Maximum magnification relative to the fitted image. */
   const MAX_ZOOM = 16;
 </script>
@@ -10,28 +12,45 @@ mounted when a signed image URL refreshes and remounts it for another image.
 <script lang="ts">
   import { SvelteMap } from 'svelte/reactivity';
   import { m } from '$lib/i18n/messages';
+  import { useImageControls, hasImageControls } from './imageControlsContext';
+  import SvgAnimation from './SvgAnimation.svelte';
+  import { svgAnimationPoster, svgDataUrl } from '$lib/svgAnimationFrame';
 
   let {
     src,
     alt,
-    onerror
+    onerror,
+    svgSource
   }: {
     src: string;
     alt: string;
     onerror: () => void;
+    /** Sanitized source for an animated diagram, separate from uploaded images. */
+    svgSource?: string;
   } = $props();
 
   let stage: HTMLDivElement;
+  const viewerControls = hasImageControls() ? useImageControls() : undefined;
+
+  /** Relocate the one shared toolbar; its lifecycle and state stay with this canvas. */
+  function placeControls(node: HTMLDivElement) {
+    const target = viewerControls?.();
+    if (!target) return;
+    target.prepend(node);
+    return () => node.remove();
+  }
   let zoom = $state(1);
   let offsetX = $state(0);
   let offsetY = $state(0);
-  let naturalWidth = 0;
-  let naturalHeight = 0;
-  let stageWidth = 0;
-  let stageHeight = 0;
-  // Pointer positions stay relative to the stage while it owns pointer capture.
+  let naturalWidth = $state(0);
+  let naturalHeight = $state(0);
+  let stageWidth = $state(0);
+  let stageHeight = $state(0);
+  // Pointer positions stay relative to the stage; capture stays on the hit element.
   const pointers = new SvelteMap<number, { x: number; y: number }>();
   const percent = $derived(Math.round(zoom * 100));
+  const poster = $derived(svgSource ? svgDataUrl(svgAnimationPoster(svgSource)) : src);
+  const limits = $derived(bounds());
 
   /** Limit panning to the fitted image's enlarged edges. */
   function bounds(atZoom = zoom) {
@@ -53,7 +72,7 @@ mounted when a signed image URL refreshes and remounts it for another image.
 
   /** Adjust the offset so the stage point under the cursor stays fixed. */
   function zoomAt(requested: number, clientX?: number, clientY?: number) {
-    const next = Math.max(1, Math.min(MAX_ZOOM, requested));
+    const next = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, requested));
     if (next === zoom) return;
     const rect = stage.getBoundingClientRect();
     const x = (clientX ?? rect.left + rect.width / 2) - rect.left - rect.width / 2;
@@ -71,34 +90,50 @@ mounted when a signed image URL refreshes and remounts it for another image.
     offsetY = 0;
   }
 
+  /** Preserve the user's zoom and keep pan within the resized stage. */
+  function measureStage() {
+    stageWidth = stage.clientWidth;
+    stageHeight = stage.clientHeight;
+    if (!stageWidth || !stageHeight || !naturalWidth || !naturalHeight) return;
+    clampPan(offsetX, offsetY);
+  }
+
   function measure(node: HTMLDivElement) {
-    const observer = new ResizeObserver(() => {
-      stageWidth = node.clientWidth;
-      stageHeight = node.clientHeight;
-      clampPan(offsetX, offsetY);
-    });
+    const observer = new ResizeObserver(measureStage);
     observer.observe(node);
     return () => observer.disconnect();
   }
 
   function measureImage(image: HTMLImageElement) {
+    let frame = 0;
     const update = () => {
       naturalWidth = image.naturalWidth;
       naturalHeight = image.naturalHeight;
-      clampPan(offsetX, offsetY);
+      // Image dimensions must reach layout before measuring bounds.
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(measureStage);
     };
     image.addEventListener('load', update);
     // A cached image can complete before its load listener is attached.
     if (image.complete) update();
-    return () => image.removeEventListener('load', update);
+    return () => {
+      cancelAnimationFrame(frame);
+      image.removeEventListener('load', update);
+    };
   }
 
   function wheelZoom(node: HTMLDivElement) {
     function wheel(event: WheelEvent) {
       if (!naturalWidth || !naturalHeight) return;
+      const unit =
+        event.deltaMode === WheelEvent.DOM_DELTA_LINE
+          ? 16
+          : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+            ? stageHeight
+            : 1;
+      zoomAt(zoom * Math.exp(-event.deltaY * unit * 0.002), event.clientX, event.clientY);
       event.preventDefault();
-      const delta = event.deltaY * (event.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : 1);
-      zoomAt(zoom * Math.exp(-delta * 0.002), event.clientX, event.clientY);
+      event.stopPropagation();
     }
     node.addEventListener('wheel', wheel, { passive: false });
     return () => node.removeEventListener('wheel', wheel);
@@ -130,9 +165,12 @@ mounted when a signed image URL refreshes and remounts it for another image.
   }
 
   function pointerdown(event: PointerEvent) {
-    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    // Control-click opens the native context menu on macOS.
+    if (event.button !== 0 || (event.pointerType === 'mouse' && event.ctrlKey)) return;
     pointers.set(event.pointerId, position(event));
-    stage.setPointerCapture(event.pointerId);
+    // Capturing on the stage retargets a touch's native image menu to a div.
+    const target = event.target instanceof Element ? event.target : stage;
+    target.setPointerCapture(event.pointerId);
   }
 
   function pointermove(event: PointerEvent) {
@@ -161,11 +199,13 @@ mounted when a signed image URL refreshes and remounts it for another image.
 
   function pointerend(event: PointerEvent) {
     pointers.delete(event.pointerId);
-    if (stage.hasPointerCapture(event.pointerId)) stage.releasePointerCapture(event.pointerId);
+    const target = event.target instanceof Element ? event.target : stage;
+    if (target.hasPointerCapture(event.pointerId)) target.releasePointerCapture(event.pointerId);
   }
 
   function keydown(event: KeyboardEvent) {
-    if (!stage?.closest('dialog')?.open || event.altKey || event.ctrlKey || event.metaKey) return;
+    const active = stage?.closest('dialog')?.open;
+    if (!active || event.altKey || event.ctrlKey || event.metaKey) return;
     if (
       event.target instanceof Element &&
       event.target.closest('input,textarea,select,[contenteditable]')
@@ -181,14 +221,20 @@ mounted when a signed image URL refreshes and remounts it for another image.
 
 <svelte:window onkeydown={keydown} />
 
-<div class="flex h-full min-h-0 w-full flex-col bg-black text-white">
+<div
+  class="image-canvas relative flex h-full min-h-0 w-full flex-col bg-background text-text"
+  data-sidebar-swipe-ignore
+  style:--message-code-background="var(--color-background)"
+>
   <div
     bind:this={stage}
     {@attach measure}
     {@attach wheelZoom}
     {@attach gestureZoom}
     role="group"
+    tabindex="-1"
     aria-label={m('ui.image_modal.fallback_alt')}
+    dir="ltr"
     class="relative min-h-0 flex-1 touch-none overflow-hidden select-none"
     style:cursor={zoom > 1 ? (pointers.size ? 'grabbing' : 'grab') : 'zoom-in'}
     onpointerdown={pointerdown}
@@ -198,22 +244,70 @@ mounted when a signed image URL refreshes and remounts it for another image.
     onlostpointercapture={pointerend}
     ondblclick={(event) => zoomAt(zoom === 1 ? 2 : 1, event.clientX, event.clientY)}
   >
-    <img
-      {src}
-      {alt}
-      draggable="false"
-      class="h-full w-full touch-none object-contain outline-none"
+    <div
+      class="image-canvas-layer absolute inset-0"
       style={`transform: translate(${offsetX}px, ${offsetY}px) scale(${zoom})`}
-      {@attach measureImage}
-      {onerror}
-    />
+    >
+      <img
+        src={poster}
+        {alt}
+        draggable="false"
+        data-canvas-image
+        class={['image-canvas-asset', svgSource && 'invisible']}
+        {@attach measureImage}
+        {onerror}
+      />
+      {#if svgSource && naturalWidth && naturalHeight}
+        <div class="absolute inset-0">
+          <SvgAnimation
+            source={svgSource}
+            {alt}
+            width={naturalWidth}
+            height={naturalHeight}
+            {onerror}
+          />
+        </div>
+      {/if}
+    </div>
+    <span
+      aria-hidden="true"
+      class={[
+        'image-canvas-fade inset-x-0 top-0 h-8 bg-gradient-to-b',
+        offsetY >= limits.y - 1 && 'opacity-0'
+      ]}
+    ></span>
+    <span
+      aria-hidden="true"
+      class={[
+        'image-canvas-fade inset-x-0 bottom-0 h-8 bg-gradient-to-t',
+        offsetY <= -limits.y + 1 && 'opacity-0'
+      ]}
+    ></span>
+    <span
+      aria-hidden="true"
+      class={[
+        'image-canvas-fade inset-y-0 start-0 w-8 bg-gradient-to-r',
+        offsetX >= limits.x - 1 && 'opacity-0'
+      ]}
+    ></span>
+    <span
+      aria-hidden="true"
+      class={[
+        'image-canvas-fade inset-y-0 end-0 w-8 bg-gradient-to-l',
+        offsetX <= -limits.x + 1 && 'opacity-0'
+      ]}
+    ></span>
   </div>
-  <div class="flex shrink-0 items-center justify-center gap-1 px-2 py-1">
+  <div
+    {@attach placeControls}
+    class="flex shrink-0 items-center gap-1 bg-background p-1 text-xs text-text"
+  >
     <button
       type="button"
-      class="icon-action text-white"
+      class="mini-icon-action"
       aria-label={m('ui.image_modal.zoom_out')}
-      disabled={zoom <= 1}
+      title={m('ui.image_modal.zoom_out')}
+      disabled={zoom <= MIN_ZOOM}
       onclick={() => zoomAt(zoom - 0.25)}
     >
       <span class="iconify icon-[uil--minus] text-xl" aria-hidden="true"></span>
@@ -221,15 +315,23 @@ mounted when a signed image URL refreshes and remounts it for another image.
     <output class="w-14 text-center tabular-nums" aria-live="polite">{percent}%</output>
     <button
       type="button"
-      class="icon-action text-white"
+      class="mini-icon-action"
       aria-label={m('ui.image_modal.zoom_in')}
+      title={m('ui.image_modal.zoom_in')}
       disabled={zoom >= MAX_ZOOM}
       onclick={() => zoomAt(zoom + 0.25)}
     >
       <span class="iconify icon-[uil--plus] text-xl" aria-hidden="true"></span>
     </button>
-    <button type="button" class="ms-2 btn-secondary" disabled={zoom === 1} onclick={fit}
-      >{m('ui.image_modal.fit')}</button
+    <button
+      type="button"
+      class="ms-2 mini-icon-action px-1"
+      aria-label={m('ui.image_modal.fit')}
+      title={m('ui.image_modal.fit')}
+      disabled={zoom === 1}
+      onclick={fit}
     >
+      {m('ui.image_modal.fit')}
+    </button>
   </div>
 </div>

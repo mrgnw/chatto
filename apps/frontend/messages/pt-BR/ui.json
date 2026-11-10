@@ -1,5 +1,6 @@
 {
   "ui": {
+    "help": "Ajuda",
     "toggle_sidebar": "Alternar barra lateral",
     "notifications": "Notificações",
     "open_quick_switcher": "Abra o alternador rápido",
@@ -7,7 +8,6 @@
     "realtime_paused": "Atualizações em tempo real pausadas. Reconectando...",
     "update_available": "Uma nova versão está disponível",
     "reload": "Recarregar",
-    "sign_out": "Sair",
     "close": "Fechar",
     "auth_status": {
       "origin_title": "Sessão expirada",
@@ -65,12 +65,14 @@
       "loading": "Carregando..."
     },
     "image_modal": {
+      "open_larger": "Abrir maior",
       "previous": "Imagem anterior",
       "next": "Próxima imagem",
       "fallback_alt": "Imagem",
       "zoom_in": "Ampliar",
       "zoom_out": "Reduzir",
       "fit": "Ajustar",
+      "pause_animation": "Pausar animação",
       "details": "Detalhes",
       "file_type": "Tipo de arquivo"
     },

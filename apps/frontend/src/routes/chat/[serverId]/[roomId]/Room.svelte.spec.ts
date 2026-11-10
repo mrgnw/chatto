@@ -1,9 +1,14 @@
+import { page as browserPage } from 'vitest/browser';
+import '../../../../app.css';
 import type { MemberDirectoryAPI } from '@chatto/client/api/memberDirectory';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-svelte';
-import { tick } from 'svelte';
-import { q } from '$lib/test-utils';
+import { flushSync, tick } from 'svelte';
+import { q, testSnippet } from '$lib/test-utils';
+import ContextMenu from '$lib/ui/ContextMenu.svelte';
 import { RoomKind } from '@chatto/api-types/api/v1/rooms_pb';
+import { RoomWithViewerState } from '@chatto/api-types/api/v1/room_directory_pb';
+import { RoomNoticeStore } from '@chatto/client/room/notice';
 import { RoomThreadingMode } from '@chatto/client/util/roomThreading';
 import { RealtimeProjectionUpdate } from '@chatto/client/realtime/eventBus';
 import { MessagePostedEvent, UserJoinedRoomEvent } from '@chatto/api-types/realtime/v1/events_pb';
@@ -55,12 +60,12 @@ const mocks = vi.hoisted(() => ({
   getAppUiState: vi.fn(),
   activeCallRoomIds: new Set<string>(),
   joinedCallRoomIds: new Set<string>(),
-  threadPaneModuleLoaded: vi.fn(),
   roomSidebarModuleLoaded: vi.fn(),
   markOccurrenceRead: vi.fn().mockResolvedValue(undefined),
   roomMessages: vi.fn(),
   roomMembers: vi.fn(),
   restoreProjectedRoomWindow: vi.fn(),
+  cancelProjectedRoomJump: vi.fn(),
   mentionRoles: {
     roles: [],
     refresh: vi.fn().mockResolvedValue(true)
@@ -246,7 +251,6 @@ vi.mock('./EventList.svelte', async () => {
 });
 
 vi.mock('./ThreadPane.svelte', async () => {
-  mocks.threadPaneModuleLoaded();
   const { default: ThreadPaneMock } = await import('./RoomThreadPaneMock.svelte');
   return { default: ThreadPaneMock };
 });
@@ -258,6 +262,13 @@ vi.mock('./RoomSidebar.svelte', async () => {
 });
 
 vi.mock('./RoomSidebarToggle.svelte', async () => {
+  const { default: EmptyMock } = await import('./RoomLocalEchoEmptyMock.svelte');
+  return { default: EmptyMock };
+});
+
+// The banner has its own browser tests; keep this room-layout fixture isolated
+// from its Markdown renderer and editor dependencies, like the other panels.
+vi.mock('./RoomNoticeBanner.svelte', async () => {
   const { default: EmptyMock } = await import('./RoomLocalEchoEmptyMock.svelte');
   return { default: EmptyMock };
 });
@@ -431,11 +442,14 @@ beforeEach(() => {
         }
       },
       messageSearch: {
-        statusLoading: false,
-        statusError: false,
-        statusLoaded: true,
-        status: { state: MessageSearchState.READY },
-        ensureStatus: vi.fn()
+        availability: {
+          showSearchControls: true,
+          statusLoading: false,
+          statusError: false,
+          statusLoaded: true,
+          status: { state: MessageSearchState.READY },
+          ensureStatus: vi.fn()
+        }
       },
       pendingHighlights: highlights,
       notifications: {
@@ -455,7 +469,8 @@ beforeEach(() => {
         pins: () => ({ retain: () => () => {}, markSeen: () => {}, hasUnseen: false })
       },
       roomSearch: () => ({}),
-      restoreProjectedRoomWindow: mocks.restoreProjectedRoomWindow
+      restoreProjectedRoomWindow: mocks.restoreProjectedRoomWindow,
+      cancelProjectedRoomJump: mocks.cancelProjectedRoomJump
     }
   });
   mocks.roomKind = RoomKind.CHANNEL;
@@ -522,18 +537,19 @@ describe('Room interaction bundles', () => {
     }
   );
 
-  it('loads channel membership through the canonical member directory', async () => {
+  it('leaves channel membership loading to navigation', async () => {
     const ensureLoaded = vi
       .spyOn(RoomMembersStore.prototype, 'ensureLoaded')
       .mockImplementation(() => {});
 
     render(Room, { props: { roomId: 'room-1' } });
 
-    await vi.waitFor(() => expect(ensureLoaded).toHaveBeenCalled());
+    await tick();
+    expect(ensureLoaded).not.toHaveBeenCalled();
   });
 
   it.each(['pending', 'failed'])(
-    'restarts a %s channel member load after a reset',
+    'leaves recovery of a %s member load to the client',
     async (state) => {
       vi.spyOn(console, 'error').mockImplementation(() => {});
       let reads = 0;
@@ -548,12 +564,16 @@ describe('Room interaction bundles', () => {
       const store = new RoomMembersStore('room-1', api as unknown as MemberDirectoryAPI);
       mocks.roomMembers.mockReturnValue(store);
 
+      store.ensureLoaded();
       render(Room, { props: { roomId: 'room-1' } });
       await vi.waitFor(() => expect(api.listRoomMembers).toHaveBeenCalledOnce());
       if (state === 'failed')
         await vi.waitFor(() => expect(store.loadError).toMatchObject({ message: 'offline' }));
 
       store.resetProjectionState();
+      await tick();
+      expect(api.listRoomMembers).toHaveBeenCalledOnce();
+      void store.refresh({ minimumCursor: 'recovered' });
       await vi.waitFor(() => expect(api.listRoomMembers).toHaveBeenCalledTimes(2));
     }
   );
@@ -578,24 +598,32 @@ describe('Room interaction bundles', () => {
     expect(refresh).not.toHaveBeenCalled();
   });
 
-  it('restores projected windows through the store that mounted them', async () => {
+  it('restores rooms on entry and cancels on departure without loading the hidden room', async () => {
     const rendered = render(Room, { props: { roomId: 'room-1' } });
 
     await vi.waitFor(() => expect(mocks.restoreProjectedRoomWindow).toHaveBeenCalledOnce());
 
+    await rendered.rerender({ roomId: 'room-2' });
+    expect(mocks.restoreProjectedRoomWindow).toHaveBeenCalledTimes(2);
+    expect(mocks.restoreProjectedRoomWindow).toHaveBeenLastCalledWith('room-2');
+    expect(mocks.cancelProjectedRoomJump).toHaveBeenCalledExactlyOnceWith('room-1');
+
     rendered.unmount();
     expect(mocks.restoreProjectedRoomWindow).toHaveBeenCalledTimes(2);
-    expect(mocks.restoreProjectedRoomWindow).toHaveBeenLastCalledWith('room-1');
+    expect(mocks.cancelProjectedRoomJump).toHaveBeenLastCalledWith('room-2');
+
+    render(Room, { props: { roomId: 'room-1' } });
+    await vi.waitFor(() => expect(mocks.restoreProjectedRoomWindow).toHaveBeenCalledTimes(3));
   });
 
-  it('does not load thread or sidebar panes when the sidebar is explicitly closed', async () => {
+  it('does not mount a thread or load the closed sidebar on a room route', async () => {
     appUi.closeDesktopRoomSidebarPanel();
-    render(Room, { props: { roomId: 'room-1' } });
+    const { container } = render(Room, { props: { roomId: 'room-1' } });
 
     await tick();
     await Promise.resolve();
 
-    expect(mocks.threadPaneModuleLoaded).not.toHaveBeenCalled();
+    expect(container.querySelector('[data-testid="thread-pane-root-id"]')).toBeNull();
     expect(mocks.roomSidebarModuleLoaded).not.toHaveBeenCalled();
   });
 
@@ -664,17 +692,23 @@ describe('Room interaction bundles', () => {
     await expect.element(q(container, '[data-testid="room-event-ids"]')).toBeInTheDocument();
   });
 
-  it('loads the thread pane when the thread route is active', async () => {
+  it('mounts a direct-entry thread without an intermediate chunk loading screen', async () => {
     appUi.closeDesktopRoomSidebarPanel();
     const { container } = render(Room, {
       props: { roomId: 'room-1', threadId: 'thread-root' }
     });
 
-    await vi.waitFor(() => expect(mocks.threadPaneModuleLoaded).toHaveBeenCalledOnce());
-    expect(
-      (await waitForElement(container, '[data-testid="thread-pane-root-id"]')).textContent
-    ).toBe('thread-root');
+    expect(q(container, '[data-testid="thread-pane-root-id"]')).toHaveTextContent('thread-root');
     expect(mocks.roomSidebarModuleLoaded).not.toHaveBeenCalled();
+  });
+
+  it('does not refresh the server role catalogue when returning to a room', async () => {
+    const first = render(Room, { props: { roomId: 'room-1' } });
+    await tick();
+    first.unmount();
+    render(Room, { props: { roomId: 'room-1' } });
+    await tick();
+    expect(mocks.mentionRoles.refresh).not.toHaveBeenCalled();
   });
 
   it('loads the room sidebar when a desktop panel is active', async () => {
@@ -828,7 +862,9 @@ describe('Room interaction bundles', () => {
       props: { roomId: 'room-1', threadId: 'thread-root' }
     });
 
-    await expect.element(q(container, '[data-testid="thread-pane"]')).toBeInTheDocument();
+    await expect
+      .element(q(container, '[data-testid="thread-pane-root-id"]'))
+      .toHaveTextContent('thread-root');
     await expect
       .element(q(container, '[data-testid="room-sidebar-desktop-pane"]'))
       .toBeInTheDocument();
@@ -946,6 +982,25 @@ describe('Room interaction bundles', () => {
 });
 
 describe('Room local message echo', () => {
+  it('retains notices without requesting the member directory while Members is closed', async () => {
+    const loadMembers = vi.fn();
+    const release = vi.fn();
+    server.scope.store.loadRoomMembers = loadMembers;
+    server.scope.store.projection.rooms.set(
+      'room-1',
+      new RoomWithViewerState({ viewerState: { isMember: true } })
+    );
+    const notice = new RoomNoticeStore(server.scope.connection, 'room-1');
+    const retain = vi.spyOn(notice, 'retain').mockReturnValue(release);
+    server.scope.store.rooms.notice = () => notice;
+    appUi.closeDesktopRoomSidebarPanel();
+    const view = render(Room, { props: { roomId: 'room-1' } });
+    await tick();
+    expect(retain).toHaveBeenCalledOnce();
+    expect(loadMembers).not.toHaveBeenCalled();
+    await view.unmount();
+    expect(release).toHaveBeenCalledOnce();
+  });
   it.each(['system', 'test-user'])(
     'marks a visible arrival by %s read through its event ID',
     async (actorId) => {
@@ -1175,6 +1230,48 @@ describe('Room local message echo', () => {
     });
   });
 
+  it('offers the latest thread only while the room timeline is current', async () => {
+    const thread = (id: string) => {
+      const event = roomMessageEvent(id);
+      return {
+        ...event,
+        createdAt: new Date().toISOString(),
+        event: { ...event.event, threadExists: true }
+      };
+    };
+    mocks.timeline.getRoomEvents.mockResolvedValue({
+      ...emptyTimelinePage(),
+      events: [thread('latest-thread')]
+    });
+    mocks.timeline.getRoomEventsAround.mockResolvedValue({
+      events: [thread('historical-thread')],
+      startCursor: 'tl:historical',
+      endCursor: 'tl:historical',
+      hasOlder: true,
+      hasNewer: true
+    });
+    const { container } = render(Room, { props: { roomId: 'room-1' } });
+    const messages = mocks.roomMessages('room-1') as MessagesStore;
+    await vi.waitFor(() => expect(messages.isCurrent).toBe(true));
+
+    const checkCandidate = () =>
+      (q(container, '[data-testid="check-thread-candidate"]') as HTMLButtonElement).click();
+    const candidate = () => q(container, '[data-testid="thread-candidate-id"]');
+    checkCandidate();
+    await expect.element(candidate()).toHaveTextContent('latest-thread');
+
+    await messages.jumpToMessage('historical-thread');
+    expect(messages.isCurrent).toBe(false);
+    expect(messages.rootEvents.at(-1)?.id).toBe('historical-thread');
+    checkCandidate();
+    await expect.element(candidate()).toHaveTextContent('');
+
+    await messages.jumpToLatest();
+    expect(messages.isCurrent).toBe(true);
+    checkCandidate();
+    await expect.element(candidate()).toHaveTextContent('latest-thread');
+  });
+
   it('keeps root message-link highlights pending until the jump completes', async () => {
     highlights.set('room-1', null, 'msg-linked', 'notification-linked');
     mocks.timeline.getRoomEventsAround.mockResolvedValue({
@@ -1348,6 +1445,7 @@ describe('Room local message echo', () => {
     await tick();
     expect(highlights.current).toBe(request);
     expect(mocks.restoreProjectedRoomWindow).not.toHaveBeenCalled();
+    expect(mocks.cancelProjectedRoomJump).not.toHaveBeenCalled();
     recoveringSnapshot.set(false);
     await vi.waitFor(() => expect(mocks.timeline.getRoomEventsAround).toHaveBeenCalledTimes(2));
     resolveFirst(page);
@@ -1674,7 +1772,7 @@ describe('Room local message echo', () => {
       .toHaveClass('end-0', 'border-s');
   });
 
-  it('keeps the mobile sidebar mounted during its close transition', async () => {
+  it('removes the mobile sidebar immediately when closed', async () => {
     mocks.livekitUrl = 'wss://livekit.example.test';
     stubMatchMedia(false);
     appUi.requestRoomSidebarPanel('server-1', 'room-1', 'call', 'mobile');
@@ -1686,7 +1784,7 @@ describe('Room local message echo', () => {
     appUi.closeMobileRoomSidebarPanel();
     await tick();
 
-    expect(pane.isConnected).toBe(true);
+    expect(pane.isConnected).toBe(false);
     await expect.element(pane).not.toBeInTheDocument();
   });
 
@@ -1730,28 +1828,142 @@ describe('Room local message echo', () => {
     });
   });
 
-  it('keeps the thread open when pressing the app sidebar surface', async () => {
+  it('releases Files when its panel closes and retains it again when reopened', async () => {
+    const release = vi.fn();
+    mocks.roomFilesRetain.mockReturnValue(release);
+    appUi.openDesktopRoomSidebarPanel('files');
+    const rendered = render(Room, { props: { roomId: 'room-1' } });
+    await vi.waitFor(() => expect(mocks.roomFilesRetain).toHaveBeenCalledOnce());
+    appUi.closeDesktopRoomSidebarPanel();
+    await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
+    appUi.openDesktopRoomSidebarPanel('files');
+    await vi.waitFor(() => expect(mocks.roomFilesRetain).toHaveBeenCalledTimes(2));
+    rendered.unmount();
+    expect(release).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(['desktop', 'mobile'] as const)(
+    'reopens the loaded %s sidebar without mounting a loading placeholder',
+    async (presentation) => {
+      stubMatchMedia(presentation === 'desktop');
+      const open = () =>
+        presentation === 'desktop'
+          ? appUi.openDesktopRoomSidebarPanel('files')
+          : appUi.openMobileRoomSidebarPanel('files');
+      const close = () =>
+        presentation === 'desktop'
+          ? appUi.closeDesktopRoomSidebarPanel()
+          : appUi.closeMobileRoomSidebarPanel();
+      const selector = `[data-testid="room-sidebar-${presentation}-pane"]`;
+      open();
+      const { container } = render(Room, { props: { roomId: 'room-1' } });
+      await vi.waitFor(() =>
+        expect(container.querySelector('[data-testid="close-room-sidebar"]')).not.toBeNull()
+      );
+
+      flushSync(close);
+      expect(container.querySelector(selector)).toBeNull();
+      flushSync(open);
+
+      const pane = container.querySelector(selector);
+      expect(pane).not.toBeNull();
+      expect(pane?.querySelector('[data-loading-fog]')).toBeNull();
+      expect(pane?.querySelector('[data-testid="close-room-sidebar"]')).not.toBeNull();
+    }
+  );
+
+  it('closes the thread when pressing inside the app sidebar or server gutter', async () => {
     render(Room, { props: { roomId: 'room-1', threadId: 'thread-root' } });
     await tick();
     mocks.goto.mockClear();
 
     const appSidebar = document.createElement('div');
     appSidebar.dataset.appSidebar = 'true';
+    const control = document.createElement('button');
+    appSidebar.append(control);
     document.body.append(appSidebar);
 
     try {
-      appSidebar.dispatchEvent(
+      control.dispatchEvent(
         new PointerEvent('pointerdown', {
           bubbles: true,
           button: 0
         })
       );
 
-      expect(mocks.goto).not.toHaveBeenCalled();
+      expect(mocks.goto).toHaveBeenCalledWith('/chat/-/room-1');
     } finally {
       appSidebar.remove();
     }
   });
+
+  it('dismisses the user menu with Escape before closing the thread', async () => {
+    render(Room, { props: { roomId: 'room-1', threadId: 'thread-root' } });
+    const onclose = vi.fn();
+    const menu = render(ContextMenu, {
+      position: { x: 20, y: 20 },
+      presentation: 'floating',
+      role: 'dialog',
+      ariaLabel: 'User profile',
+      onclose,
+      children: testSnippet('<button>View profile</button>')
+    });
+    await tick();
+    await new Promise(requestAnimationFrame);
+    mocks.goto.mockClear();
+    document.body.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+    );
+    expect(onclose).toHaveBeenCalledOnce();
+    expect(mocks.goto).not.toHaveBeenCalled();
+    await menu.unmount();
+    document.body.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })
+    );
+    expect(mocks.goto).toHaveBeenCalledWith('/chat/-/room-1');
+  });
+
+  it.each([
+    { surface: 'room', role: 'menu' },
+    { surface: 'sidebar', role: 'menu' },
+    { surface: 'room', role: 'dialog' },
+    { surface: 'sidebar', role: 'dialog' }
+  ])(
+    'dismisses only the context menu with role $role on the first $surface press',
+    async ({ surface, role }) => {
+      const { container } = render(Room, {
+        props: { roomId: 'room-1', threadId: 'thread-root' }
+      });
+      const onclose = vi.fn();
+      const menu = render(ContextMenu, {
+        position: { x: 20, y: 20 },
+        presentation: 'floating',
+        role,
+        onclose,
+        children: testSnippet('<button role="menuitem">Menu action</button>')
+      });
+      await tick();
+      await new Promise(requestAnimationFrame);
+      mocks.goto.mockClear();
+
+      const sidebar = document.createElement('div');
+      sidebar.dataset.appSidebar = 'true';
+      document.body.append(sidebar);
+      const target =
+        surface === 'sidebar' ? sidebar : q(container, '[data-testid="room-view-region"]')!;
+      try {
+        target.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0 }));
+        expect(onclose).toHaveBeenCalledOnce();
+        expect(mocks.goto).not.toHaveBeenCalled();
+
+        await menu.unmount();
+        target.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, button: 0 }));
+        expect(mocks.goto).toHaveBeenCalledWith('/chat/-/room-1');
+      } finally {
+        sidebar.remove();
+      }
+    }
+  );
 
   it('closes the thread when pressing the room view behind it', async () => {
     const { container } = render(Room, {
@@ -1845,15 +2057,56 @@ describe('Room local message echo', () => {
     );
 
     await expect.element(desktopSidebarPane).toBeInTheDocument();
-    expect(roomRegion.className).not.toContain('lg:hidden');
+    expect(roomRegion.classList.contains('hidden')).toBe(false);
     expect(desktopSidebarPane.className).toContain('shrink-0');
 
     maximizeButton.click();
 
     await expect.element(maximizeButton).toHaveAttribute('data-maximized', 'true');
-    expect(roomRegion.className).toContain('lg:hidden');
+    expect(roomRegion.classList.contains('hidden')).toBe(true);
     expect(desktopSidebarPane.className).toContain('flex-1');
     expect(desktopSidebarPane.className).not.toContain('shrink-0');
+  });
+
+  it('keeps a wide call visible across breakpoints without a second mobile pane', async () => {
+    const previousViewport = { width: window.innerWidth, height: window.innerHeight };
+    const setMatchMedia = stubMatchMedia(true);
+    mocks.livekitUrl = 'wss://livekit.example.test';
+    mocks.activeCallRoomIds.add('room-1');
+    appUi.openMobileRoomSidebarPanel('call');
+    appUi.requestRoomSidebarPanel('server-1', 'room-1', 'call', 'desktop');
+    const { container } = render(Room, { props: { roomId: 'room-1' } });
+    const maximizeButton = await waitForElement<HTMLButtonElement>(
+      container,
+      '[data-testid="toggle-maximized-call"]'
+    );
+    maximizeButton.click();
+    await expect.element(maximizeButton).toHaveAttribute('data-maximized', 'true');
+
+    try {
+      for (const width of [1440, 1024, 1023, 800, 390, 1440]) {
+        await browserPage.viewport(width, 480);
+        setMatchMedia(width >= 1024);
+        await tick();
+        await expect.element(q(container, '[data-testid="room-view-region"]')).not.toBeVisible();
+        await expect
+          .element(q(container, '[data-testid="room-sidebar-desktop-pane"]'))
+          .toBeVisible();
+        await expect
+          .element(q(container, '[data-testid="room-sidebar-mobile-pane"]'))
+          .not.toBeInTheDocument();
+        await expect.element(maximizeButton).toBeVisible();
+      }
+
+      await browserPage.viewport(390, 480);
+      setMatchMedia(false);
+      maximizeButton.click();
+      await tick();
+      await expect.element(q(container, '[data-testid="room-sidebar-mobile-pane"]')).toBeVisible();
+      expect(appUi.mobileRoomSidebarPanel).toBe('call');
+    } finally {
+      await browserPage.viewport(previousViewport.width, previousViewport.height);
+    }
   });
 
   it('restores the room view when a maximized desktop call ends', async () => {
@@ -1874,14 +2127,14 @@ describe('Room local message echo', () => {
     maximizeButton.click();
 
     await expect.element(maximizeButton).toHaveAttribute('data-maximized', 'true');
-    expect(roomRegion.className).toContain('lg:hidden');
+    expect(roomRegion.classList.contains('hidden')).toBe(true);
     expect(desktopSidebarPane.className).toContain('flex-1');
 
     mocks.activeCallRoomIds.clear();
     await rendered.rerender({ roomId: 'room-1' });
 
     await expect.element(maximizeButton).toHaveAttribute('data-maximized', 'false');
-    expect(roomRegion.className).not.toContain('lg:hidden');
+    expect(roomRegion.classList.contains('hidden')).toBe(false);
     expect(desktopSidebarPane.className).toContain('shrink-0');
     expect(desktopSidebarPane.className).not.toContain('flex-1');
   });
@@ -1903,14 +2156,14 @@ describe('Room local message echo', () => {
     maximizeButton.click();
 
     await expect.element(maximizeButton).toHaveAttribute('data-maximized', 'true');
-    expect(roomRegion.className).toContain('lg:hidden');
+    expect(roomRegion.classList.contains('hidden')).toBe(true);
     expect(desktopSidebarPane.className).toContain('flex-1');
 
     appUi.disableRoomCallWideFor('server-1', 'room-1');
     await tick();
 
     await expect.element(maximizeButton).toHaveAttribute('data-maximized', 'false');
-    expect(roomRegion.className).not.toContain('lg:hidden');
+    expect(roomRegion.classList.contains('hidden')).toBe(false);
     expect(desktopSidebarPane.className).toContain('shrink-0');
     expect(desktopSidebarPane.className).not.toContain('flex-1');
   });
@@ -1937,7 +2190,7 @@ describe('Room local message echo', () => {
     await tick();
 
     await expect.element(maximizeButton).toHaveAttribute('data-maximized', 'true');
-    expect(roomRegion.className).toContain('lg:hidden');
+    expect(roomRegion.classList.contains('hidden')).toBe(true);
     expect(desktopSidebarPane.className).toContain('flex-1');
   });
 });

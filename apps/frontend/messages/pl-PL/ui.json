@@ -1,5 +1,6 @@
 {
   "ui": {
+    "help": "Pomoc",
     "toggle_sidebar": "Przełącz pasek boczny",
     "notifications": "Powiadomienia",
     "open_quick_switcher": "Otwórz szybki przełącznik",
@@ -7,7 +8,6 @@
     "realtime_paused": "Aktualizacje w czasie rzeczywistym wstrzymane. Ponowne łączenie...",
     "update_available": "Dostępna jest nowa wersja",
     "reload": "Załaduj ponownie",
-    "sign_out": "Wyloguj się",
     "close": "Zamknij",
     "auth_status": {
       "origin_title": "Sesja wygasła",
@@ -65,12 +65,14 @@
       "loading": "Ładowanie..."
     },
     "image_modal": {
+      "open_larger": "Otwórz większy widok",
       "previous": "Poprzedni obraz",
       "next": "Następny obraz",
       "fallback_alt": "Obraz",
       "zoom_in": "Powiększ",
       "zoom_out": "Pomniejsz",
       "fit": "Dopasuj",
+      "pause_animation": "Wstrzymaj animację",
       "details": "Szczegóły",
       "file_type": "Typ pliku"
     },

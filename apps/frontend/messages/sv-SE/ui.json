@@ -1,5 +1,6 @@
 {
   "ui": {
+    "help": "Hjälp",
     "toggle_sidebar": "Växla sidofältet",
     "notifications": "Aviseringar",
     "open_quick_switcher": "Öppna snabbväxeln",
@@ -7,7 +8,6 @@
     "realtime_paused": "Realtidsuppdateringar pausade. Återansluter...",
     "update_available": "En ny version är tillgänglig",
     "reload": "Ladda om",
-    "sign_out": "Logga ut",
     "close": "Stäng",
     "auth_status": {
       "origin_title": "Sessionen har löpt ut",
@@ -65,12 +65,14 @@
       "loading": "Laddar..."
     },
     "image_modal": {
+      "open_larger": "Öppna större",
       "previous": "Föregående bild",
       "next": "Nästa bild",
       "fallback_alt": "Bild",
       "zoom_in": "Zooma in",
       "zoom_out": "Zooma ut",
       "fit": "Anpassa",
+      "pause_animation": "Pausa animeringen",
       "details": "Detaljer",
       "file_type": "Filtyp"
     },

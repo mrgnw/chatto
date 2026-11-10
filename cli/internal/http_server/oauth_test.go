@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chattocorp/chatto/cli/internal/readmodel"
+
 	"connectrpc.com/connect"
 	"github.com/chattocorp/chatto/cli/internal/authctx"
 	"github.com/chattocorp/chatto/cli/internal/config"
@@ -64,6 +66,7 @@ func setupOAuthServerWithAuth(t *testing.T, auth config.AuthConfig) *HTTPServer 
 
 	chattoCore, err := core.NewChattoCore(ctx, nc, config.CoreConfig{
 		AuthTokenTTL:              auth.TokenTTL.Duration(),
+		AuthProviders:             auth.Providers,
 		AuthLoopbackClientEnabled: auth.LoopbackClientEnabled,
 		SkipSetupWizard:           true,
 	})
@@ -162,7 +165,7 @@ func TestInjectUserIntoContextDoesNotRenewCookieCredential(t *testing.T) {
 	}
 }
 
-func loginOAuthTestUser(t *testing.T, s *HTTPServer, login string) ([]*http.Cookie, *evtv1.User) {
+func loginOAuthTestUser(t *testing.T, s *HTTPServer, login string) ([]*http.Cookie, *readmodel.User) {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	t.Cleanup(cancel)
@@ -262,6 +265,34 @@ func TestOAuthAuthorize_UsesConfiguredProviderHint(t *testing.T) {
 	}
 	if location := w.Header().Get("Location"); location != "/auth/providers/authling?redirect=%2Foauth%2Fauthorize" {
 		t.Fatalf("authorize Location = %q, want configured provider start", location)
+	}
+}
+
+func TestOAuthAuthorize_SignupHint(t *testing.T) {
+	for _, hint := range []string{"signup", "unknown"} {
+		t.Run(hint, func(t *testing.T) {
+			s := setupOAuthServer(t)
+			requestURL := "/oauth/authorize?" + url.Values{
+				"response_type": {"code"}, "client_id": {testOAuthClientID},
+				"redirect_uri":          {"https://chatto.example/servers/callback"},
+				"code_challenge":        {core.GenerateCodeChallenge("signup-verifier")},
+				"code_challenge_method": {"S256"}, "state": {"signup-state"},
+				"screen_hint": {hint},
+			}.Encode()
+			w := httptest.NewRecorder()
+			s.router.ServeHTTP(w, httptest.NewRequest(http.MethodGet, requestURL, nil))
+			location, err := url.Parse(w.Header().Get("Location"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantPath := "/login"
+			if hint == "signup" {
+				wantPath = "/register"
+			}
+			if w.Code != http.StatusTemporaryRedirect || location.Path != wantPath || location.Query().Get("redirect") != requestURL {
+				t.Fatalf("unexpected authorization entry: status=%d path=%s", w.Code, location.Path)
+			}
+		})
 	}
 }
 
@@ -1601,7 +1632,7 @@ func TestOfficialMCPClientCompletesChattoOAuthAndDiscoversTools(t *testing.T) {
 	for _, tool := range tools.Tools {
 		upgradedTools = append(upgradedTools, tool.Name)
 	}
-	if !slices.Equal(upgradedTools, []string{"get_current_user", "get_server_info", "list_rooms", "post_message"}) {
+	if !slices.Equal(upgradedTools, []string{"add_reaction", "delete_message", "get_current_user", "get_server_info", "list_rooms", "post_message", "remove_reaction", "send_direct_message", "update_message"}) {
 		t.Fatalf("upgraded tool catalog = %v", upgradedTools)
 	}
 }
@@ -1903,8 +1934,9 @@ func TestCookiePresentedCredentialRejectsRetiredSignedSessionFields(t *testing.T
 
 	s.router.GET("/test/retired-cookie-session", func(c *gin.Context) {
 		session := sessions.Default(c)
-		session.Set(retiredSessionKeyUserID, "Ulegacy")
-		session.Set(retiredSessionKeyCredentialID, "cht_CSlegacy")
+		session.Set("runtime_credential_id", "legacy-handle")
+		session.Set("user_id", "Ulegacy")
+		session.Set("cookie_session_id", "cht_CSlegacy")
 		if err := session.Save(); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
@@ -1914,7 +1946,7 @@ func TestCookiePresentedCredentialRejectsRetiredSignedSessionFields(t *testing.T
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "retired signed-session fields authenticated"})
 			return
 		}
-		if session.Get(retiredSessionKeyUserID) == nil || session.Get(retiredSessionKeyCredentialID) == nil {
+		if session.Get("user_id") == nil || session.Get("cookie_session_id") == nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "validation mutated retired signed-session fields"})
 			return
 		}

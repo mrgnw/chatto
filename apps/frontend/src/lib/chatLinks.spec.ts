@@ -223,6 +223,22 @@ describe('parseMessageLink', () => {
     }
   );
 
+  it('canonicalizes an explicit home-server hostname', () => {
+    vi.spyOn(serverRegistry, 'isOriginServer').mockReturnValue(true);
+    const url = `${origin}/chat/remote.example.test/${channelRoomId}?focus=1#target`;
+    expect(resolveChatRoute(url)).toBe(`/chat/-/${channelRoomId}?focus=1#target`);
+  });
+
+  it('uses the canonical home-server segment for absolute routes and server roots', () => {
+    vi.spyOn(serverRegistry, 'isOriginServer').mockReturnValue(true);
+    vi.spyOn(serverRegistry, 'originServer', 'get').mockReturnValue(remoteServer);
+    vi.stubGlobal('window', { location: { origin: remoteServer.url } });
+    const suffix = `/${channelRoomId}/m/${messageId}`;
+    expect(resolveChatRoute(`${remoteServer.url}/chat/-${suffix}`)).toBe(`/chat/-${suffix}`);
+    expect(resolveChatRoute(`/chat/-${suffix}`)).toBe(`/chat/-${suffix}`);
+    expect(resolveChatRoute(remoteServer.url)).toBe('/chat/-');
+  });
+
   it('keeps old frontend-hosted links to a remote server readable', () => {
     const url = `${origin}/chat/remote.example.test/${channelRoomId}/m/${messageId}`;
     expect(parseMessageLink(url)?.serverId).toBe('remote');
@@ -246,8 +262,18 @@ describe('parseMessageLink', () => {
     expect(parseMessageLink(url)).toBeNull();
   });
 
+  it.each(['https://remote.example.test', 'https://remote.example.test/'])(
+    'rewrites a registered server root into this frontend: %s',
+    (url) => {
+      expect(resolveChatRoute(url)).toBe('/chat/remote.example.test');
+      expect(parseMessageLink(url)).toBeNull();
+    }
+  );
+
   it.each([
     'https://unknown.test/chat/-/overview',
+    'https://unknown.test/',
+    'https://remote.example.test/?token=example',
     'https://remote.example.test/chat/unknown.test/overview',
     'https://remote.example.test/docs',
     'https://remote.example.test/chat/%2F/overview',

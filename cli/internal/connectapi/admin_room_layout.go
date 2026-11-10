@@ -3,6 +3,8 @@ package connectapi
 import (
 	"context"
 
+	"github.com/chattocorp/chatto/cli/internal/readmodel"
+
 	"connectrpc.com/connect"
 	"github.com/chattocorp/chatto/cli/internal/core"
 	adminv1 "github.com/chattocorp/chatto/cli/internal/pb/chatto/admin/v1"
@@ -38,11 +40,16 @@ func (s *adminRoomLayoutService) GetRoomGroup(ctx context.Context, req *connect.
 	if err != nil {
 		return nil, err
 	}
+	canCreateRoom, err := s.api.core.CanCreateRoom(ctx, caller.UserID, core.KindChannel, details.Group.GetId())
+	if err != nil {
+		return nil, err
+	}
 	return connect.NewResponse(&adminv1.GetRoomGroupResponse{
 		Group: &adminv1.AdminRoomLayoutGroup{
-			Id:          details.Group.GetId(),
-			Name:        details.Group.GetName(),
-			Description: details.Group.GetDescription(),
+			Id:            details.Group.GetId(),
+			Name:          details.Group.GetName(),
+			Description:   details.Group.GetDescription(),
+			CanCreateRoom: canCreateRoom,
 		},
 		ViewerCanManageGroup:       details.CanManageGroup,
 		ViewerCanManagePermissions: details.CanManagePermissions,
@@ -79,8 +86,12 @@ func (s *adminRoomLayoutService) CreateRoomGroup(ctx context.Context, req *conne
 	if err != nil {
 		return nil, err
 	}
+	apiGroup, err := s.adminRoomLayoutGroupForViewer(ctx, caller.UserID, group, nil)
+	if err != nil {
+		return nil, err
+	}
 	return connect.NewResponse(&adminv1.CreateRoomGroupResponse{
-		Group: apiAdminRoomLayoutGroup(group, nil),
+		Group: apiGroup,
 	}), nil
 }
 
@@ -102,8 +113,12 @@ func (s *adminRoomLayoutService) UpdateRoomGroup(ctx context.Context, req *conne
 	if err != nil {
 		return nil, err
 	}
+	apiGroup, err := s.adminRoomLayoutGroupForViewer(ctx, caller.UserID, group, roomsByID)
+	if err != nil {
+		return nil, err
+	}
 	return connect.NewResponse(&adminv1.UpdateRoomGroupResponse{
-		Group: apiAdminRoomLayoutGroup(group, roomsByID),
+		Group: apiGroup,
 	}), nil
 }
 
@@ -181,8 +196,12 @@ func (s *adminRoomLayoutService) ReorderSidebarItemsInGroup(ctx context.Context,
 	if err != nil {
 		return nil, err
 	}
+	apiGroup, err := s.adminRoomLayoutGroupForViewer(ctx, caller.UserID, group, roomsByID)
+	if err != nil {
+		return nil, err
+	}
 	return connect.NewResponse(&adminv1.ReorderSidebarItemsInGroupResponse{
-		Group: apiAdminRoomLayoutGroup(group, roomsByID),
+		Group: apiGroup,
 	}), nil
 }
 
@@ -205,8 +224,12 @@ func (s *adminRoomLayoutService) MoveSidebarItem(ctx context.Context, req *conne
 	if err != nil {
 		return nil, err
 	}
+	apiGroup, err := s.adminRoomLayoutGroupForViewer(ctx, caller.UserID, group, roomsByID)
+	if err != nil {
+		return nil, err
+	}
 	return connect.NewResponse(&adminv1.MoveSidebarItemResponse{
-		Group: apiAdminRoomLayoutGroup(group, roomsByID),
+		Group: apiGroup,
 	}), nil
 }
 
@@ -276,30 +299,40 @@ func (s *adminRoomLayoutService) getAdminRoomLayoutGroups(ctx context.Context, u
 	}
 	apiGroups := make([]*adminv1.AdminRoomLayoutGroup, 0, len(groups))
 	for _, group := range groups {
-		apiGroup := apiAdminRoomLayoutGroup(group, roomsByID)
-		canCreateRoom, err := s.api.core.CanCreateRoom(ctx, userID, core.KindChannel, group.GetId())
+		apiGroup, err := s.adminRoomLayoutGroupForViewer(ctx, userID, group, roomsByID)
 		if err != nil {
 			return nil, err
 		}
-		apiGroup.CanCreateRoom = canCreateRoom
 		apiGroups = append(apiGroups, apiGroup)
 	}
 	return apiGroups, nil
 }
 
-func (s *adminRoomLayoutService) channelRoomsByID(ctx context.Context) (map[string]*evtv1.Room, error) {
+// adminRoomLayoutGroupForViewer keeps capabilities consistent in list and
+// mutation responses. The capability is advisory; commands authorize again.
+func (s *adminRoomLayoutService) adminRoomLayoutGroupForViewer(ctx context.Context, userID string, group *readmodel.RoomGroup, roomsByID map[string]*readmodel.Room) (*adminv1.AdminRoomLayoutGroup, error) {
+	apiGroup := apiAdminRoomLayoutGroup(group, roomsByID)
+	canCreateRoom, err := s.api.core.CanCreateRoom(ctx, userID, core.KindChannel, group.GetId())
+	if err != nil {
+		return nil, err
+	}
+	apiGroup.CanCreateRoom = canCreateRoom
+	return apiGroup, nil
+}
+
+func (s *adminRoomLayoutService) channelRoomsByID(ctx context.Context) (map[string]*readmodel.Room, error) {
 	rooms, err := s.api.core.ListRooms(ctx, core.KindChannel)
 	if err != nil {
 		return nil, err
 	}
-	roomsByID := make(map[string]*evtv1.Room, len(rooms))
+	roomsByID := make(map[string]*readmodel.Room, len(rooms))
 	for _, room := range rooms {
 		roomsByID[room.GetId()] = room
 	}
 	return roomsByID, nil
 }
 
-func apiAdminRoomLayoutGroup(group *evtv1.RoomGroup, roomsByID map[string]*evtv1.Room) *adminv1.AdminRoomLayoutGroup {
+func apiAdminRoomLayoutGroup(group *readmodel.RoomGroup, roomsByID map[string]*readmodel.Room) *adminv1.AdminRoomLayoutGroup {
 	if group == nil {
 		return nil
 	}
@@ -308,7 +341,7 @@ func apiAdminRoomLayoutGroup(group *evtv1.RoomGroup, roomsByID map[string]*evtv1
 		Name:        group.GetName(),
 		Description: group.GetDescription(),
 	}
-	sidebarLinksByID := make(map[string]*evtv1.SidebarLink, len(group.GetSidebarLinks()))
+	sidebarLinksByID := make(map[string]*readmodel.SidebarLink, len(group.GetSidebarLinks()))
 	for _, link := range group.GetSidebarLinks() {
 		sidebarLinksByID[link.GetId()] = link
 	}

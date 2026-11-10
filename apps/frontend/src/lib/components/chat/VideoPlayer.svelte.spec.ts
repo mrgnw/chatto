@@ -6,14 +6,24 @@ import { isHLSProvider } from 'vidstack';
 import type { MediaPlayerElement } from 'vidstack/elements';
 import { VideoProcessingStatus } from '@chatto/client/timeline/messageAttachments';
 import VideoPlayer from './VideoPlayer.svelte';
+import { fullscreenVideo } from '$lib/state/globals.svelte';
 
 const TRANSPARENT_THUMBNAIL = 'data:image/gif;base64,R0lGODlhAQABAAAAACwAAAAAAQABAAA=';
 
-function renderAutoLoopVideo({ width, height }: { width: number; height: number }) {
+function renderAutoLoopVideo({
+  width,
+  height,
+  onOpen
+}: {
+  width: number;
+  height: number;
+  onOpen?: () => void;
+}) {
   return render(VideoPlayer, {
     props: {
       status: VideoProcessingStatus.Completed,
       filename: 'clip.mp4',
+      onOpen,
       autoLoop: true,
       variants: [
         {
@@ -68,7 +78,7 @@ function renderPostedVideo({
 }
 
 function frame(container: HTMLElement): HTMLElement {
-  const element = container.querySelector<HTMLElement>('.embed-frame');
+  const element = container.querySelector<HTMLElement>('.preview-frame');
   expect(element).not.toBeNull();
   return element!;
 }
@@ -95,6 +105,90 @@ async function posterImage(container: HTMLElement): Promise<HTMLImageElement> {
 }
 
 describe('VideoPlayer', () => {
+  it('opens a GIF from its preview without a reader toolbar', async () => {
+    const onOpen = vi.fn();
+    const view = renderAutoLoopVideo({ width: 640, height: 480, onOpen });
+    const button = view.getByRole('button', { name: 'View clip.mp4' });
+    expect(view.container.querySelector('button video[data-autoloop]')).not.toBeNull();
+    expect(view.container.querySelector('.preview-toolbar')).toBeNull();
+    await button.click();
+    expect(onOpen).toHaveBeenCalledOnce();
+  });
+
+  it('keeps playback controls inside the player without a reader toolbar', async () => {
+    const view = renderPostedVideo({ width: 1280, height: 720 });
+    const player = (await mediaPlayer(view.container)) as MediaPlayerElement;
+    player.$state.canFullscreen.set(true);
+    player.$state.canGoogleCast.set(true);
+    player.$state.canPictureInPicture.set(true);
+    player.$state.controlsVisible.set(true);
+    player.$state.started.set(true);
+    await tick();
+    expect(view.container.querySelector('.preview-toolbar')).toBeNull();
+    for (const selector of ['.vds-fullscreen-button', '.compact-pip', '.vds-google-cast-button']) {
+      await expect.poll(() => player.querySelector(selector)).toBeTruthy();
+      await expect
+        .poll(() => getComputedStyle(player.querySelector(selector)!).display)
+        .not.toBe('none');
+    }
+  });
+
+  it('aligns compact PiP with Cast and volume controls', async () => {
+    const view = renderPostedVideo({ width: 1280, height: 720 });
+    const player = (await mediaPlayer(view.container)) as MediaPlayerElement;
+    player.$state.canGoogleCast.set(true);
+    player.$state.canPictureInPicture.set(true);
+    player.$state.started.set(true);
+    player.$state.controlsVisible.set(true);
+    await expect.poll(() => player.querySelector('.vds-mute-button')).toBeTruthy();
+    await tick();
+    const pip = player.querySelector('.compact-pip')!.getBoundingClientRect();
+    const volume = player.querySelector('.vds-mute-button')!.getBoundingClientRect();
+    const cast = player.querySelector('.vds-google-cast-button')!.getBoundingClientRect();
+    expect(pip.top).toBe(volume.top);
+    expect(pip.height).toBe(volume.height);
+    expect(pip.top).toBe(cast.top);
+    expect(pip.right).toBeLessThan(volume.left);
+  });
+
+  it('preserves playback time when the player requests fullscreen', async () => {
+    const view = renderPostedVideo({ width: 1280, height: 720 });
+    const player = (await mediaPlayer(view.container)) as MediaPlayerElement;
+    const media = await playerVideo(view.container);
+    vi.spyOn(media, 'pause').mockImplementation(() => {});
+    const open = vi.spyOn(fullscreenVideo, 'open').mockImplementation(() => {});
+    media.currentTime = 12;
+    player.dispatchEvent(
+      new CustomEvent('media-enter-fullscreen-request', { bubbles: true, cancelable: true })
+    );
+    expect(open).toHaveBeenCalledWith(
+      { src: 'https://chat.example.test/clip.mp4', type: 'video/mp4' },
+      null,
+      12,
+      null,
+      null
+    );
+  });
+
+  it.each([
+    [1280, 720],
+    [1080, 1920]
+  ])(
+    'reserves the %sx%s frame before the player registers and on remount',
+    async (width, height) => {
+      for (let mount = 0; mount < 2; mount += 1) {
+        const view = renderPostedVideo({ width, height });
+        view.container.style.width = '240px';
+        const initial = frame(view.container).getBoundingClientRect();
+        await mediaPlayer(view.container);
+        const ready = frame(view.container).getBoundingClientRect();
+        expect(initial.width).toBeCloseTo(ready.width, 0);
+        expect(initial.height).toBeCloseTo(ready.height, 0);
+        await view.unmount();
+      }
+    }
+  );
+
   it.each([
     [VideoProcessingStatus.Pending, 'Video queued for processing...'],
     [VideoProcessingStatus.Processing, 'Processing video...']
@@ -105,11 +199,13 @@ describe('VideoPlayer', () => {
     const videoFrame = frame(container);
     const fog = container.querySelector<HTMLElement>('[data-loading-fog]');
 
-    expect(videoFrame.getAttribute('style')).toContain('aspect-ratio: 480 / 270');
+    expect(videoFrame.getAttribute('style')).toContain('--preview-media-ratio: 480 / 270');
     expect(fog?.getAttribute('aria-label')).toBe(label);
     await expect.poll(() => fog?.getBoundingClientRect().width).toBeGreaterThan(0);
-    expect(fog?.getBoundingClientRect().width).toBeCloseTo(videoFrame.clientWidth, 0);
-    expect(fog?.getBoundingClientRect().height).toBeCloseTo(videoFrame.clientHeight, 0);
+    // The loading canvas fills the content box inside the shared 4px preview rim.
+    expect(fog?.getBoundingClientRect().width).toBeCloseTo(videoFrame.clientWidth - 8, 0);
+    expect(container.querySelector('.preview-toolbar')).toBeNull();
+    expect(fog?.getBoundingClientRect().height).toBeCloseTo(videoFrame.clientHeight - 8, 0);
   });
 
   it('initializes the HLS provider for a newly processed HLS-only video', async () => {
@@ -164,15 +260,15 @@ describe('VideoPlayer', () => {
       await expect
         .poll(() => frame(container).getBoundingClientRect().width)
         .toBeLessThanOrEqual(width);
-      const bounds = frame(container).getBoundingClientRect();
-      expect(bounds.height).toBeCloseTo((bounds.width * 9) / 16, 0);
+      const bounds = container.querySelector('media-player')!.getBoundingClientRect();
+      expect(bounds.height).toBeCloseTo(Math.max(128, (bounds.width * 9) / 16), 0);
     }
   });
 
   it('frames 16:9 videos as 16:9 embeds', () => {
     const { container } = renderAutoLoopVideo({ width: 1600, height: 900 });
 
-    expect(frame(container).getAttribute('style')).toContain('aspect-ratio: 480 / 270');
+    expect(frame(container).getAttribute('style')).toContain('--preview-media-ratio: 480 / 270');
     expect(video(container).className).toContain('h-full');
     expect(video(container).className).toContain('w-full');
   });
@@ -180,7 +276,7 @@ describe('VideoPlayer', () => {
   it('preserves 4:3 autoloop videos instead of forcing 16:9', () => {
     const { container } = renderAutoLoopVideo({ width: 640, height: 480 });
 
-    expect(frame(container).getAttribute('style')).toContain('aspect-ratio: 427 / 320');
+    expect(frame(container).getAttribute('style')).toContain('--preview-media-ratio: 427 / 320');
   });
 
   it('preserves near-square posted landscape videos', async () => {
@@ -193,7 +289,7 @@ describe('VideoPlayer', () => {
     await mediaPlayer(container);
     const poster = await posterImage(container);
 
-    expect(frame(container).getAttribute('style')).toContain('aspect-ratio: 427 / 320');
+    expect(frame(container).getAttribute('style')).toContain('--preview-media-ratio: 427 / 320');
     expect(getComputedStyle(poster).objectFit).toBe('contain');
   });
 
@@ -208,7 +304,7 @@ describe('VideoPlayer', () => {
     const media = await playerVideo(container);
     const poster = await posterImage(container);
 
-    expect(frame(container).getAttribute('style')).toContain('aspect-ratio: 256 / 320');
+    expect(frame(container).getAttribute('style')).toContain('--preview-media-ratio: 256 / 320');
     expect(
       Math.abs(media.getBoundingClientRect().width - player.getBoundingClientRect().width)
     ).toBeLessThanOrEqual(2);
@@ -230,7 +326,7 @@ describe('VideoPlayer', () => {
     await mediaPlayer(container);
     const poster = await posterImage(container);
 
-    expect(frame(container).getAttribute('style')).toContain('aspect-ratio: 180 / 320');
+    expect(frame(container).getAttribute('style')).toContain('--preview-media-ratio: 180 / 320');
     expect(getComputedStyle(poster).objectFit).toBe('contain');
   });
 
@@ -241,11 +337,15 @@ describe('VideoPlayer', () => {
     await mediaPlayer(portrait.container);
     await mediaPlayer(landscape.container);
 
-    expect(frame(portrait.container).getAttribute('style')).toContain('aspect-ratio: 213 / 320');
-    expect(frame(landscape.container).getAttribute('style')).toContain('aspect-ratio: 480 / 320');
+    expect(frame(portrait.container).getAttribute('style')).toContain(
+      '--preview-media-ratio: 213 / 320'
+    );
+    expect(frame(landscape.container).getAttribute('style')).toContain(
+      '--preview-media-ratio: 480 / 320'
+    );
   });
 
-  it('letterboxes extreme ratios inside a usable player canvas', async () => {
+  it('reserves only the space needed for controls at extreme video ratios', async () => {
     const tall = renderPostedVideo({ width: 100, height: 1000 });
     const wide = renderPostedVideo({ width: 1000, height: 100 });
 
@@ -254,25 +354,70 @@ describe('VideoPlayer', () => {
     const tallMedia = await playerVideo(tall.container);
     const wideMedia = await playerVideo(wide.container);
 
-    expect(frame(tall.container).getAttribute('style')).toContain('aspect-ratio: 180 / 320');
-    expect(frame(wide.container).getAttribute('style')).toContain('aspect-ratio: 480 / 270');
+    expect(frame(tall.container).getAttribute('style')).toContain(
+      '--preview-media-ratio: 180 / 320'
+    );
+    expect(frame(wide.container).getAttribute('style')).toContain(
+      '--preview-media-ratio: 480 / 128'
+    );
     expect(getComputedStyle(tallPlayer).aspectRatio).toBe('180 / 320');
-    expect(getComputedStyle(widePlayer).aspectRatio).toBe('480 / 270');
+    expect(getComputedStyle(widePlayer).aspectRatio).toBe('480 / 128');
     expect(getComputedStyle(tallMedia).objectFit).toBe('contain');
     expect(getComputedStyle(wideMedia).objectFit).toBe('contain');
+  });
+
+  it.each([
+    [3000, 1000, 480, 160],
+    [1000, 100, 480, 48],
+    [100, 1000, 32, 320]
+  ])('fits a %sx%s GIF loop to its source proportions', (width, height, w, h) => {
+    const { container } = renderAutoLoopVideo({ width, height });
+    container.style.width = '640px';
+    const bounds = frame(container).getBoundingClientRect();
+    const canvas = video(container).getBoundingClientRect();
+    expect(bounds.width).toBe(w);
+    expect(canvas.height).toBeCloseTo((canvas.width * height) / width, 1);
+    expect(bounds.height - canvas.height).toBeCloseTo(10, 1);
+    expect(bounds.width - canvas.width).toBe(10);
+    expect(bounds.height).toBeLessThanOrEqual(h + 10);
+    expect(video(container).controls).toBe(false);
+    expect(getComputedStyle(video(container)).objectFit).toBe('contain');
+  });
+
+  it('preserves a wide video without a 16:9 canvas', async () => {
+    const { container } = renderPostedVideo({ width: 3000, height: 1000 });
+    await mediaPlayer(container);
+    expect(frame(container).style.getPropertyValue('--preview-media-ratio').trim()).toBe(
+      '480 / 160'
+    );
+  });
+
+  it.each([
+    [10, 1000],
+    [1000, 10]
+  ])('keeps an inset canvas visible for a %sx%s GIF', (width, height) => {
+    const { container } = renderAutoLoopVideo({ width, height });
+    container.style.width = '640px';
+    const bounds = frame(container).getBoundingClientRect();
+    const canvas = video(container).getBoundingClientRect();
+    expect(bounds.width).toBeGreaterThanOrEqual(24);
+    expect(bounds.height).toBeGreaterThanOrEqual(24);
+    expect(canvas.width).toBeGreaterThan(0);
+    expect(canvas.height).toBeGreaterThan(0);
+    expect(getComputedStyle(video(container)).objectFit).toBe('contain');
   });
 
   it('corrects stale metadata after the browser loads intrinsic video dimensions', async () => {
     const { container } = renderAutoLoopVideo({ width: 1024, height: 768 });
     const media = video(container);
 
-    expect(frame(container).getAttribute('style')).toContain('aspect-ratio: 427 / 320');
+    expect(frame(container).getAttribute('style')).toContain('--preview-media-ratio: 427 / 320');
 
     Object.defineProperty(media, 'videoWidth', { configurable: true, value: 1920 });
     Object.defineProperty(media, 'videoHeight', { configurable: true, value: 1080 });
     media.dispatchEvent(new Event('loadedmetadata'));
     await tick();
 
-    expect(frame(container).getAttribute('style')).toContain('aspect-ratio: 480 / 270');
+    expect(frame(container).getAttribute('style')).toContain('--preview-media-ratio: 480 / 270');
   });
 });

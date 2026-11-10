@@ -1,7 +1,7 @@
 # FDR-046: Privileged Mode
 
 **Status:** Active
-**Last reviewed:** 2026-10-07
+**Last reviewed:** 2026-11-03
 
 ## Overview
 
@@ -15,6 +15,7 @@ server session when they need them.
   user has an elevation-required permission entitlement. This includes owner
   entitlement and explicit allows at any scope. A deny can still prevent an
   explicit allow from becoming effective.
+- Settings Overview shows a notice inside Server configuration when the mode is available but inactive. It directs the user to the shield button beside their name to activate additional permissions. The notice disappears while the mode is active.
 - Activating the mode requires a confirmation.
 - The mode activates all elevation-required permissions that the user is
   entitled to use. It does not activate a role and does not add a grant.
@@ -30,6 +31,9 @@ server session when they need them.
   deactivation response. It keeps its resume cursor and mounted realtime
   projection. After resume, ConnectRPC resource reads update effective room
   permissions in place before catch-up completes.
+- Rapid completed changes keep realtime delivery usable when the client is
+  current. A newer change replaces pending recovery and waits for the latest
+  effective permissions.
 - At the 15-minute deadline, the server closes each affected realtime
   connection with a reconnect instruction. The resumed subscription replaces
   effective permissions with privileged mode inactive. The server does not
@@ -81,7 +85,7 @@ The initial catalog requires privileged mode for these permissions:
 - `message.manage`
 - `role.manage` and `role.assign`
 - `admin.view-users` and `admin.view-audit`
-- `user.invite`, `user.delete-any`, `user.manage-accounts`, and
+- `user.manage-invites`, `user.delete-any`, `user.manage-accounts`, and
   `user.manage-permissions`
 - `bot.manage`
 - owner-only system diagnostics

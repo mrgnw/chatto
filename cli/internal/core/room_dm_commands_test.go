@@ -5,6 +5,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chattocorp/chatto/cli/internal/readmodel"
+
 	"github.com/chattocorp/chatto/cli/internal/evtstream"
 	evtv1 "github.com/chattocorp/chatto/cli/internal/pb/chatto/core/evt/v1"
 	"github.com/chattocorp/chatto/pkg/events"
@@ -23,7 +25,6 @@ func (m dmTestMemberships) RoomMembershipExists(_ context.Context, _ RoomKind, u
 }
 
 func TestRoomCommandModelDMWithoutCoreCallbacks(t *testing.T) {
-	t.Parallel()
 	core, _ := setupTestCore(t)
 	ctx := testContext(t)
 	commands := &RoomCommandModel{
@@ -51,7 +52,6 @@ func TestRoomCommandModelDMWithoutCoreCallbacks(t *testing.T) {
 }
 
 func TestRoomCommandModelDMConflictWaitsAndChecksMembership(t *testing.T) {
-	t.Parallel()
 	for _, removed := range []bool{false, true} {
 		name := "member"
 		if removed {
@@ -81,7 +81,7 @@ func TestRoomCommandModelDMConflictWaitsAndChecksMembership(t *testing.T) {
 			_, err := harness.publisher.AppendBatch(ctx, entries)
 			require.NoError(t, err)
 			type result struct {
-				room    *evtv1.Room
+				room    *readmodel.Room
 				created bool
 				err     error
 			}

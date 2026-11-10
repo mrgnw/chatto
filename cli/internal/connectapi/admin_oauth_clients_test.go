@@ -13,12 +13,11 @@ import (
 	apiv1 "github.com/chattocorp/chatto/cli/internal/pb/chatto/api/v1"
 	evtv1 "github.com/chattocorp/chatto/cli/internal/pb/chatto/core/evt/v1"
 	"github.com/chattocorp/chatto/pkg/events"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestAdminOAuthClientServiceLifecycleAndAuthorization(t *testing.T) {
-	t.Parallel()
-
 	env := newConnectAPITestEnv(t)
 	clientID := "https://remote.example/oauth/client-metadata.json"
 	if err := env.core.RecordOAuthClientAuthorization(env.ctx, env.viewer.Id, clientID, "Remote Chatto", "https://remote.example", "https://remote.example", evtv1.OAuthClientSource_OAUTH_CLIENT_SOURCE_CIMD); err != nil {
@@ -55,11 +54,19 @@ func TestAdminOAuthClientServiceLifecycleAndAuthorization(t *testing.T) {
 	if _, err := env.adminOAuthClients.GetOAuthClient(ctx, connect.NewRequest(&adminv1.GetOAuthClientRequest{ClientId: "https://missing.example/client.json"})); err == nil || errorCode(err) != connect.CodeNotFound {
 		t.Fatalf("missing GetOAuthClient error = %v, want not found", err)
 	}
+	reset, err := env.adminOAuthClients.UpdateOAuthClientPolicy(ctx, connect.NewRequest(&adminv1.UpdateOAuthClientPolicyRequest{
+		ClientId:   clientID,
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"policy"}},
+	}))
+	if err != nil {
+		t.Fatalf("reset OAuth policy: %v", err)
+	}
+	if reset.Msg.GetOauthClient().GetPolicy() != adminv1.OauthClientPolicy_OAUTH_CLIENT_POLICY_DEFAULT {
+		t.Fatal("selected absent policy must reset to DEFAULT")
+	}
 }
 
 func TestAdminOAuthClientServicePreservesFutureEnumValues(t *testing.T) {
-	t.Parallel()
-
 	env := newConnectAPITestEnv(t)
 	const clientID = "https://future.example/oauth/client-metadata.json"
 	if err := env.core.RecordOAuthClientAuthorization(
@@ -163,8 +170,6 @@ func TestAdminOAuthClientServicePreservesFutureEnumValues(t *testing.T) {
 }
 
 func TestAdminOAuthClientServicePaginationDoesNotReshuffleOnAuthorization(t *testing.T) {
-	t.Parallel()
-
 	env := newConnectAPITestEnv(t)
 	clientIDs := []string{
 		"https://alpha.example/oauth/client-metadata.json",

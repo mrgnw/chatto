@@ -1,16 +1,22 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 import AppHeader from './AppHeader.svelte';
+import AppHeaderTestHarness from './AppHeaderTestHarness.svelte';
+import { createTestServerScope } from '$lib/test-utils/serverScope.svelte';
+import type { ServerStateStore } from '@chatto/client/server/store';
 import { cdp, page } from 'vitest/browser';
 import '../../app.css';
+import { desktopUpdates } from '$lib/desktop/updates.svelte';
 
 const { mocks } = vi.hoisted(() => ({
   mocks: {
     servers: [] as Array<{ id: string }>,
     activeServer: '',
+    callStore: null as ServerStateStore | null,
     activeStore: undefined as
       | {
           serverInfo: { motd: string };
+          voiceCall: { connected: boolean };
           attention: {
             counts: {
               unreadNotificationCount: number;
@@ -49,7 +55,12 @@ vi.mock('$lib/client', async () => ({
         ? { id, url: `https://${id}.example.com` }
         : undefined,
     getStore: mocks.getStore,
-    tryGetStore: (id: string) => (id === mocks.activeServer ? mocks.activeStore : undefined)
+    tryGetStore: (id: string) =>
+      id === mocks.callStore?.serverId
+        ? mocks.callStore
+        : id === mocks.activeServer
+          ? mocks.activeStore
+          : undefined
   },
   serverConnectionManager: {
     originClient: {
@@ -85,6 +96,98 @@ vi.mock('$lib/state/globals.svelte', () => ({
   }
 }));
 describe('AppHeader', () => {
+  it.each([320, 375, 420, 1280])(
+    'keeps the other server call accessible at %i pixels',
+    async (width) => {
+      const leave = vi.fn();
+      const call = createTestServerScope({
+        serverId: 'call-server',
+        store: {
+          voiceCall: { connected: true, roomId: 'room-1', isMuted: true, leave },
+          navigation: { rooms: [] },
+          attention: { counts: { unreadNotificationCount: 0, importantUnreadNotificationCount: 0 } }
+        }
+      });
+      mocks.activeServer = 'other-server';
+      mocks.servers = [{ id: 'other-server' }, { id: 'call-server' }];
+      mocks.callStore = call.scope.store;
+      await page.viewport(width, 480);
+      try {
+        const { container, getByRole } = render(AppHeaderTestHarness);
+        const header = container.querySelector('header')!;
+        const bounds = header.getBoundingClientRect();
+        const controls = header.querySelector('[data-testid="app-header-call-card"]')!;
+        expect(controls).not.toBeNull();
+        for (const button of controls.querySelectorAll('button')) {
+          const rect = button.getBoundingClientRect();
+          expect(rect.width).toBeGreaterThanOrEqual(28);
+          expect(rect.height).toBeGreaterThanOrEqual(30);
+          expect(rect.left).toBeGreaterThanOrEqual(bounds.left);
+          expect(rect.right).toBeLessThanOrEqual(bounds.right);
+          expect(rect.top).toBeGreaterThanOrEqual(bounds.top);
+          expect(rect.bottom).toBeLessThanOrEqual(bounds.bottom);
+        }
+        expect(getComputedStyle(header.firstElementChild!).gap).toBe('12px');
+        if (width >= 420) {
+          expect(header.scrollWidth).toBeLessThanOrEqual(header.clientWidth);
+        } else {
+          // With Help beside About, narrow screens use the header's scroll fallback.
+          // Preserve navigation spacing and the call controls' minimum target sizes.
+          const about = header.querySelector<HTMLButtonElement>('button[title="About Chatto"]')!;
+          const help = header.querySelector<HTMLAnchorElement>('a[href="/help"]')!;
+          help.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+          expect(about.getBoundingClientRect().left).toBeGreaterThanOrEqual(bounds.left);
+          expect(help.getBoundingClientRect().right).toBeLessThanOrEqual(bounds.right);
+          expect(help.getBoundingClientRect().left).toBeGreaterThan(
+            about.getBoundingClientRect().left
+          );
+          expect(about.getBoundingClientRect().right).toBeLessThanOrEqual(bounds.right);
+        }
+        await getByRole('button', { name: 'Leave call', exact: true }).click();
+        expect(leave).toHaveBeenCalledOnce();
+      } finally {
+        mocks.callStore = null;
+        await page.viewport(1280, 720);
+      }
+    }
+  );
+  it('shows an update-ready link only while a host update is ready', async () => {
+    const { getByRole } = render(AppHeader);
+    await expect.element(getByRole('link', { name: 'Update ready' })).not.toBeInTheDocument();
+    desktopUpdates.status = {
+      revision: 1,
+      version: '0.5.0',
+      status: 'ready',
+      busy: false,
+      progress: null,
+      availableVersion: '0.6.0',
+      automatic: true,
+      channel: 'stable'
+    };
+    await expect
+      .element(getByRole('link', { name: 'Update ready' }))
+      .toHaveAttribute('href', '/chat/preferences/desktop');
+    desktopUpdates.status = null;
+    await expect.element(getByRole('link', { name: 'Update ready' })).not.toBeInTheDocument();
+  });
+  it('keeps the current server when opening cross-server notifications', () => {
+    mocks.activeServer = 'remote';
+    mocks.servers = [{ id: 'remote' }];
+    mocks.authenticated = { remote: true };
+    const { container } = render(AppHeader);
+    expect(
+      container.querySelector('a[href="/chat/remote.example.com/notifications"]')
+    ).not.toBeNull();
+    mocks.activeServer = '';
+  });
+
+  it('keeps global notifications available when the origin is signed out', () => {
+    mocks.activeServer = 'origin';
+    mocks.servers = [{ id: 'origin' }, { id: 'remote' }];
+    mocks.authenticated = { remote: true };
+    const { container } = render(AppHeader);
+    expect(container.querySelector('a[href="/chat/notifications"]')).not.toBeNull();
+  });
   it('hides on mobile with the keyboard and returns when it closes', async () => {
     await cdp().send('Emulation.setTouchEmulationEnabled', { enabled: true });
     await page.viewport(390, 800);
@@ -196,6 +299,7 @@ describe('AppHeader', () => {
         await empty.unmount();
         mocks.activeStore = {
           serverInfo: { motd },
+          voiceCall: { connected: false },
           attention: {
             counts: { unreadNotificationCount: 0, importantUnreadNotificationCount: 0 }
           }

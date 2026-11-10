@@ -1,7 +1,7 @@
 # FDR-002: Replies & Threads
 
 **Status:** Active
-**Last reviewed:** 2026-10-18
+**Last reviewed:** 2026-11-09
 
 ## Overview
 
@@ -20,9 +20,14 @@ can configure their Threading Mode. DMs always use Enabled behavior.
   or has an existing thread, including a thread with no replies. The linked
   message is highlighted in the thread pane. A message without a thread opens
   in the room timeline. Thread existence is checked when the link is opened.
+- A message jump marks its destination with a soft accent fill and a leading-edge
+  marker, then fades the cue. With reduced motion, the cue stays still before it
+  clears. Repeating a jump marks the destination again.
 - Integrations can read all distinct authors of current thread replies in
-  bounded pages. Retracted replies and erased authors do not contribute. The
-  root author is included only if they also replied. Counts cover the full set.
+  bounded pages. Retracted replies and erased authors do not contribute.
+  Counts cover the full set. A thread without replies has no reply authors.
+  The thread badge shows only reply authors. The root author appears there
+  only when they also have a current reply.
 - Integrations can read their own stored room and thread read positions, one
   target at a time or in bounded batches. A read does not mark content as read
   or initialize a missing position. These positions are separate from
@@ -51,6 +56,17 @@ can configure their Threading Mode. DMs always use Enabled behavior.
   notifications in that thread. Emoji reactions do not activate this dot. They
   remain in the notification list and notification counts.
 - A thread is a sequence of messages starting from a root message and continuing inside a dedicated thread pane. Threads can contain plain messages or reply-attributed messages; both are valid.
+- Below 1024 px viewport width, the thread header has one back arrow to return to the room and no trailing close button. Desktop controls remain available at wider widths. Header targets are at least 44 px square whenever touch input is available.
+- The thread header shows up to 3, 5, 8, or 12 participant avatars at pane widths
+  below 360 px, from 360 px, from 480 px, or from 640 px respectively, plus the
+  number of additional participants. It adapts when the pane is resized.
+  Timeline and followed-thread responses include up to 12 reply-author identities
+  for this preview. The total count can be larger.
+  Left-click, right-click, or long-press an avatar to
+  open the user context menu. The menu includes the full profile action.
+  The header adds the root author to the reply authors. The root
+  author appears first and counts once, including when they also reply.
+  Erased authors are excluded. The preview stays compact to leave room for header controls.
 - A root message with an attached thread does not group with adjacent messages
   from the same author. The root and the next message show a full author header.
   This also applies to an empty thread. Plain messages inside a thread can still
@@ -65,7 +81,7 @@ can configure their Threading Mode. DMs always use Enabled behavior.
 - Every channel room has a Threading Mode:
   - **Required** — every new root atomically establishes its thread. The room composer keeps **Post as thread** visible, selected, and locked so the policy is explicit without presenting a false choice. The standard **Reply** action opens the root's thread with reply attribution. The adjacent **Reply in thread** action opens the same thread without attribution. Inside the thread, **Reply** creates attribution in that thread. The server rejects replies to roots unless they are placed in that root's thread. Automatic root-thread creation needs `message.post`, which also includes reply authority.
   - **Encouraged** — both flat and threaded conversation remain valid. The standard **Reply** action opens the root's thread with reply attribution. The adjacent **Reply in thread** action opens it without attribution, and **Reply in room** remains available as a secondary expanded-menu action. **Post as thread** starts selected for each new root draft, but the author may turn it off.
-  - **Enabled** — the default and unrestricted behavior. Authors may opt into **Post as thread**, and other members may start a thread later.
+  - **Enabled** — the default and unrestricted behavior. Authors may opt into **Post as thread**, and other members may start a thread later. When a root already has a thread, the standard **Reply** action opens that thread with reply attribution if the member can reply there. **Reply in room** remains available in the expanded menu. Roots without a thread use an in-room reply. If the member cannot reply in the thread, **Reply** falls back to the room when permitted.
   - **Disabled** — the server rejects new threads, thread replies, thread typing
     indicators, and new channel echoes from historical thread replies. Ordinary
     in-room reply attribution remains available. Existing threads and channel
@@ -75,13 +91,17 @@ can configure their Threading Mode. DMs always use Enabled behavior.
 - Outside Required rooms, a root explicitly posted as a thread is immediately marked as a thread and the author follows it, while the composer remains in the room timeline. If nobody explicitly establishes an ordinary root's thread, the first thread reply establishes one implicitly.
 - Threading Mode changes are prospective: they do not backfill threads for existing roots or remove historical thread state.
 - A successful Threading Mode change appears as an actor-attributed room timeline event. The same ordered realtime update also refreshes room metadata, so open composers and reply actions react immediately.
-- Before a user posts another root within five minutes of their latest root in the room, the client checks whether that previous root now has a thread. If it does, the client asks whether to continue in that thread or post the prepared root as-is. This also covers a thread another user established after the root was posted. Cancelling preserves the draft. The prompt is omitted when the user cannot post in that thread or when the current room policy forbids thread replies.
+- Before a user posts a root in an Enabled, Encouraged, or Required room, the client checks whether the newest root in the loaded room timeline has a thread. If it does, the client asks whether to reply in that thread or post the prepared root as-is. The prompt appears only when that root was posted at most 30 minutes ago. The client checks its age when the user submits the draft. Edits and new thread replies do not restart this window. The author does not affect this check. After the window ends, the client posts normally without the prompt. The prompt is omitted unless the loaded timeline is current; a history window must not supply the suggested thread. A newer flat or deleted root prevents an older thread from qualifying. Explicit room replies bypass this prompt and keep their selected reply target. Cancelling preserves the draft. The prompt is omitted when the user cannot post in that thread or when the current room policy forbids thread replies.
 - Thread badges in the room timeline are normal links to the thread URL, so users can copy or open the thread link through browser-native link actions.
 - Links copied from messages inside a thread reopen that thread and focus the linked message. A root message can be opened in its thread pane before the thread has any replies.
 - My Threads lists followed conversations with their root, latest visible
   reply, participant preview, reply count, activity time, reply unread state,
   and client-side decoration for a matching unread notification.
 - An open thread overlays the dimmed, inactive room timeline by default. A user can instead select a side-by-side layout in App Preferences. The side-by-side layout keeps both panes interactive when the room area is wide enough and uses the overlay when the area becomes too narrow. The side-by-side thread pane is resizable, and the app remembers its width on the device.
+- The thread pane opens and closes with a short slide. Switching to another thread
+  in the same room gives the pane a brief fade and small movement without remounting
+  it for animation. New replies, message jumps within the same thread, and changes
+  to the pane layout do not replay this effect. Reduced motion disables both effects.
 - A visible thread in a focused app reads incoming replies automatically. Its
   unread and notification indicators stay hidden while the user views it.
   After a successful read, the client refreshes the thread state even if no
@@ -150,11 +170,11 @@ thread projection data require explicit client opt-ins.
 **Why:** UI steering alone cannot constrain bots, integrations, stale clients, or an in-flight message that races an administrator's setting change. The room aggregate already owns both policy changes and message facts, so it is the natural consistency boundary.
 **Tradeoff:** Changing a room's mode can cause a composer submission prepared under the previous mode to fail and require the user to retry in the newly valid location.
 
-### 10. Recent follow-up steering is a client-side destination choice
+### 10. Latest-thread steering is a client-side destination choice
 
-**Decision:** When the latest root authored by the current user gained a thread and is at most five minutes old, a subsequent root submission pauses before uploads or mentions are processed and offers two explicit destinations: the previous thread or a new root. Choosing the thread preserves the message contents but clears root-only thread creation intent. Choosing the room preserves the prepared root, including Encouraged or Required mode behavior.
-**Why:** Rapid follow-up messages are often continuations, but automatically moving text would be surprising and could change its audience. A timely choice catches the likely mistake while leaving both valid conversation shapes available.
-**Tradeoff:** The safeguard depends on the client's current retained timeline and clock, so it is guidance rather than a server invariant. The server continues to enforce only permissions and Threading Mode.
+**Decision:** When the newest root in the loaded room timeline has a thread and was posted at most 30 minutes ago, a subsequent root submission without an explicit reply target pauses before uploads or mentions are processed and offers two explicit destinations: the latest thread or a new root. Choosing the thread preserves the message contents but clears root-only thread creation intent. Choosing the room preserves the prepared root, including Encouraged or Required mode behavior. This action is labelled **Start a new thread** when the prepared root creates a thread, and **Post as new message** otherwise.
+**Why:** A room message can accidentally start a new conversation when its author intended to reply to the latest thread. An explicit destination choice prevents this mistake without moving messages automatically. The 30-minute limit avoids interruptions when a user returns to a quiet room.
+**Tradeoff:** The safeguard depends on the client's current retained timeline, so it is guidance rather than a server invariant. The server continues to enforce only permissions and Threading Mode.
 
 ## Permissions
 

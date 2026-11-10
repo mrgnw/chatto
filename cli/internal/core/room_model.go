@@ -4,6 +4,8 @@ import (
 	"context"
 	"time"
 
+	"github.com/chattocorp/chatto/cli/internal/readmodel"
+
 	"github.com/chattocorp/chatto/cli/internal/evtstream"
 	evtv1 "github.com/chattocorp/chatto/cli/internal/pb/chatto/core/evt/v1"
 	"github.com/chattocorp/chatto/pkg/events"
@@ -127,11 +129,11 @@ func (m *RoomModel) waitForLiveEVTEvent(ctx context.Context, pos events.StreamPo
 	return nil
 }
 
-func (m *RoomModel) room(roomID string) (*evtv1.Room, bool) {
+func (m *RoomModel) room(roomID string) (*readmodel.Room, bool) {
 	return m.directory.Projection().Catalog.Get(roomID)
 }
 
-func (m *RoomModel) roomsByKind(kind evtv1.RoomKind) []*evtv1.Room {
+func (m *RoomModel) roomsByKind(kind evtv1.RoomKind) []*readmodel.Room {
 	return m.directory.Projection().Catalog.AllByKind(kind)
 }
 
@@ -155,7 +157,7 @@ func (m *RoomModel) explicitRoomMemberIDs(roomID string) []string {
 	return m.directory.Projection().Membership.Members(roomID)
 }
 
-func (m *RoomModel) roomGroup(groupID string) (*evtv1.RoomGroup, bool) {
+func (m *RoomModel) roomGroup(groupID string) (*readmodel.RoomGroup, bool) {
 	return m.groupLayout.Projection().Groups.Get(groupID)
 }
 
@@ -163,7 +165,7 @@ func (m *RoomModel) roomGroupSnapshot(groupID string) RoomGroupSnapshot {
 	return m.groupLayout.Projection().Groups.Snapshot(groupID)
 }
 
-func (m *RoomModel) roomGroups() []*evtv1.RoomGroup {
+func (m *RoomModel) roomGroups() []*readmodel.RoomGroup {
 	return m.groupLayout.Projection().Groups.All()
 }
 
@@ -334,7 +336,17 @@ func (m *RoomModel) threadEvents(rootEventID string) []*TimelineEntry {
 }
 
 func (m *RoomModel) threadMetadata(rootEventID string) *ThreadMetadata {
-	return m.threads.Projection().ThreadMetadata(rootEventID)
+	return m.threads.Projection().ThreadMetadata(rootEventID, m.threadRootAuthorID(rootEventID))
+}
+
+// threadRootAuthorID reads the displayed author, including mapped import authors.
+// The thread preview puts this author first only if they have replied.
+func (m *RoomModel) threadRootAuthorID(rootEventID string) string {
+	entry, ok := m.timelineEntry(rootEventID)
+	if !ok || !entry.IsMessagePost() || entry.InThreadEventID != "" || entry.EchoOfEventID != "" {
+		return ""
+	}
+	return timelineEntryMessageAuthorID(entry)
 }
 
 func (m *RoomModel) threadFollowState(userID, roomID, threadRootEventID string) ThreadFollowState {
@@ -387,5 +399,5 @@ func (m *RoomModel) threadParticipantIDs(ctx context.Context, rootID string) ([]
 	if err := m.threads.Projector().WaitForCurrent(ctx); err != nil {
 		return nil, err
 	}
-	return m.threads.Projection().ParticipantIDs(rootID), nil
+	return m.threads.Projection().ParticipantIDs(rootID, m.threadRootAuthorID(rootID)), nil
 }

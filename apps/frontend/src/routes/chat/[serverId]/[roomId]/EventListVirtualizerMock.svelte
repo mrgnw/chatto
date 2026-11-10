@@ -22,9 +22,11 @@
 
   let {
     data,
+    shift = false,
     children
   }: {
     data: unknown[];
+    shift?: boolean;
     children: Snippet<[unknown]>;
   } = $props();
 
@@ -32,7 +34,9 @@
   let scrollCalls = $state(0);
   let lastAlignment = $state('');
   let lastOffset = $state(0);
-  let renderedItem = $derived(renderedIndex === null ? undefined : data[renderedIndex]);
+  // The timeline can reach the bottom through its native scroll container,
+  // without issuing a virtualizer scrollToIndex command.
+  let renderedItem = $derived(data[renderedIndex ?? data.length - 1]);
   let renderedKey = $derived(
     (renderedItem as { key?: string } | undefined)?.key ?? renderedIndex ?? 'empty'
   );
@@ -66,6 +70,7 @@
 </script>
 
 <output data-testid="virtualizer-scroll-index">{renderedIndex ?? ''}</output>
+<output data-testid="virtualizer-shift">{String(shift)}</output>
 <output data-testid="virtualizer-scroll-calls">{scrollCalls}</output>
 <output data-testid="virtualizer-scroll-alignment">{lastAlignment}</output>
 <output data-testid="virtualizer-scroll-offset">{lastOffset}</output>

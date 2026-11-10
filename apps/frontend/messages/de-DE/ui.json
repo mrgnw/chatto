@@ -1,5 +1,6 @@
 {
   "ui": {
+    "help": "Hilfe",
     "toggle_sidebar": "Seitenleiste umschalten",
     "notifications": "Benachrichtigungen",
     "open_quick_switcher": "Schnellwechsler öffnen",
@@ -7,7 +8,6 @@
     "realtime_paused": "Echtzeitaktualisierungen pausiert. Verbindung wird wiederhergestellt...",
     "update_available": "Eine neue Version ist verfügbar",
     "reload": "Neu laden",
-    "sign_out": "Abmelden",
     "close": "Schließen",
     "auth_status": {
       "origin_title": "Sitzung abgelaufen",
@@ -65,12 +65,14 @@
       "loading": "Wird geladen..."
     },
     "image_modal": {
+      "open_larger": "Größer öffnen",
       "previous": "Vorheriges Bild",
       "next": "Nächstes Bild",
       "fallback_alt": "Bild",
       "zoom_in": "Vergrößern",
       "zoom_out": "Verkleinern",
       "fit": "Einpassen",
+      "pause_animation": "Animation anhalten",
       "details": "Details",
       "file_type": "Dateityp"
     },

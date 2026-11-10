@@ -1,22 +1,64 @@
 import { Code, ConnectError } from '@connectrpc/connect';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { AdminRoleService } from '@chatto/api-types/admin/v1/roles_connect';
+import { AdminRole } from '@chatto/api-types/admin/v1/roles_pb';
+import { AdminUserService } from '@chatto/api-types/admin/v1/members_connect';
 import { RoleService } from '@chatto/api-types/api/v1/roles_connect';
 import { createRoleAPI } from '../roles.js';
 import { fakeServer, mockService, receivedRequest } from '../../testing/fakeServer.js';
 
 const roles = mockService(RoleService);
 const adminRoles = mockService(AdminRoleService);
+const adminUsers = mockService(AdminUserService);
 
 function roleAPI() {
   return createRoleAPI(
-    fakeServer((router) => router.service(RoleService, roles).service(AdminRoleService, adminRoles))
+    fakeServer((router) =>
+      router
+        .service(RoleService, roles)
+        .service(AdminRoleService, adminRoles)
+        .service(AdminUserService, adminUsers)
+    )
   );
 }
 
 describe('createRoleAPI', () => {
   beforeEach(() => {
     vi.resetAllMocks();
+  });
+
+  it('reads role assignments independently of private member details', async () => {
+    adminUsers.getUserRoleAssignments.mockReturnValue({
+      assignments: {
+        userId: 'target',
+        roleNames: ['helper'],
+        assignableRoleNames: ['helper', 'reader'],
+        revocableRoleNames: ['helper']
+      }
+    });
+    const result = await roleAPI().getUserRoleAssignments('target');
+    expect(result).toEqual({
+      userId: 'target',
+      roleNames: ['helper'],
+      assignableRoleNames: ['helper', 'reader'],
+      revocableRoleNames: ['helper']
+    });
+    expect(receivedRequest(adminUsers.getUserRoleAssignments)).toMatchObject({ userId: 'target' });
+    expect(adminUsers.getMember).not.toHaveBeenCalled();
+  });
+
+  it('preserves assignment-read errors and rejects a missing resource', async () => {
+    const api = roleAPI();
+    adminUsers.getUserRoleAssignments.mockImplementation(() => {
+      throw new ConnectError('denied', Code.PermissionDenied);
+    });
+    await expect(api.getUserRoleAssignments('target')).rejects.toMatchObject({
+      code: Code.PermissionDenied
+    });
+    adminUsers.getUserRoleAssignments.mockReturnValue({});
+    await expect(api.getUserRoleAssignments('target')).rejects.toThrow(
+      'did not include assignment state'
+    );
   });
 
   it('lists public roles', async () => {
@@ -43,8 +85,6 @@ describe('createRoleAPI', () => {
           name: 'moderator',
           displayName: 'Moderator',
           description: 'Moderates rooms',
-          permissions: [],
-          permissionDenials: [],
           isSystem: true,
           position: 100,
           pingable: true
@@ -69,8 +109,7 @@ describe('createRoleAPI', () => {
     const api = roleAPI();
 
     await expect(api.getPublicRole('moderator')).resolves.toMatchObject({
-      name: 'moderator',
-      permissions: []
+      name: 'moderator'
     });
     await expect(api.batchGetPublicRoles(['moderator', 'missing'])).resolves.toMatchObject([
       { name: 'moderator' }
@@ -92,8 +131,9 @@ describe('createRoleAPI', () => {
             position: 100,
             pingable: true
           },
-          permissions: ['room.manage'],
-          permissionDenials: ['message.post']
+          memberCount: 12n,
+          permissionGrantCount: 5n,
+          permissionDenialCount: 0n
         }
       ],
       viewerCanManageRoles: true,
@@ -109,8 +149,9 @@ describe('createRoleAPI', () => {
           name: 'moderator',
           displayName: 'Moderator',
           description: 'Moderates rooms',
-          permissions: ['room.manage'],
-          permissionDenials: ['message.post'],
+          memberCount: 12,
+          permissionGrantCount: 5,
+          permissionDenialCount: 0,
           isSystem: true,
           position: 100,
           pingable: true
@@ -119,6 +160,29 @@ describe('createRoleAPI', () => {
       viewerCanManageRoles: true,
       viewerCanAssignRoles: false
     });
+  });
+
+  it('ignores legacy permission arrays while preserving metadata and totals', async () => {
+    const current = new AdminRole({
+      role: { name: 'helper', displayName: 'Helper' },
+      memberCount: 2n,
+      permissionGrantCount: 5n,
+      permissionDenialCount: 1n
+    });
+    // Older servers encode the removed string arrays at tags 2 and 3.
+    const legacy = AdminRole.fromBinary(
+      new Uint8Array([...current.toBinary(), 0x12, 1, 0x78, 0x1a, 1, 0x79])
+    );
+    adminRoles.listRoles.mockReturnValue({ roles: [legacy] });
+    const { roles } = await roleAPI().listAdminRoles();
+    expect(roles[0]).toMatchObject({
+      name: 'helper',
+      memberCount: 2,
+      permissionGrantCount: 5,
+      permissionDenialCount: 1
+    });
+    expect(roles[0]).not.toHaveProperty('permissions');
+    expect(roles[0]).not.toHaveProperty('permissionDenials');
   });
 
   it('gets role metadata', async () => {
@@ -131,9 +195,7 @@ describe('createRoleAPI', () => {
           isSystem: false,
           position: 10,
           pingable: false
-        },
-        permissions: [],
-        permissionDenials: []
+        }
       },
       viewerCanManageRoles: true,
       viewerCanAssignRoles: true
@@ -148,8 +210,6 @@ describe('createRoleAPI', () => {
         name: 'helpdesk',
         displayName: 'Helpdesk',
         description: '',
-        permissions: [],
-        permissionDenials: [],
         isSystem: false,
         position: 10,
         pingable: false
@@ -188,8 +248,6 @@ describe('createRoleAPI', () => {
       name: 'helpdesk',
       displayName: 'Helpdesk',
       description: 'Support queue',
-      permissions: [],
-      permissionDenials: [],
       isSystem: false,
       position: 10,
       pingable: true
@@ -202,9 +260,7 @@ describe('createRoleAPI', () => {
         isSystem: role.isSystem,
         position: role.position,
         pingable: role.pingable
-      },
-      permissions: role.permissions,
-      permissionDenials: role.permissionDenials
+      }
     };
     adminRoles.createRole.mockReturnValue({ role: apiRole });
     adminRoles.updateRole.mockReturnValue({

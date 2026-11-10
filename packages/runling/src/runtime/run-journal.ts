@@ -16,6 +16,8 @@ export type RunSource = 'webhook' | 'web' | 'source' | 'cli';
 
 export interface RunSummary {
   id: string;
+  /** Optional plain-text display title, updated by run.title events. */
+  title?: string;
   /** Human-readable, journal-local reference. Older journals use their UUID. */
   reference?: string;
   /** Webhook or source name; `cli` for command-line runs. */
@@ -29,6 +31,8 @@ export interface RunSummary {
   pid?: number;
   status: RunStatus;
   startedAt: number;
+  /** Console projection only: current execution start when startedAt covers the full history. */
+  executionStartedAt?: number;
   finishedAt?: number;
   durationMs?: number;
   /** Total usage across all execution attempts. */
@@ -139,9 +143,17 @@ export async function createRunJournal(
 
 /** Read journal records with their byte lengths. An incomplete final line is skipped, and its
  * offset is kept, so that a reader can truncate it. */
-export async function* readRunJournal(path: string) {
+export async function* readRunJournal(
+  path: string,
+  options: { end?: number; signal?: AbortSignal } = {}
+) {
+  if (options.end === 0) return;
   let buffer = '';
-  for await (const chunk of createReadStream(path, { encoding: 'utf8' })) {
+  for await (const chunk of createReadStream(path, {
+    encoding: 'utf8',
+    signal: options.signal,
+    end: options.end === undefined ? undefined : options.end - 1
+  })) {
     buffer += chunk;
     let end: number;
     while ((end = buffer.indexOf('\n')) !== -1) {

@@ -13,8 +13,6 @@ import (
 )
 
 func TestThreadProjection_ParticipantPreviewKeepsFirstReplyOrder(t *testing.T) {
-	t.Parallel()
-
 	p := NewThreadProjection()
 	events := []*evtv1.Event{postedEvent(postedOpts{envelopeID: "ROOT", roomID: "R1", actorID: "U-ROOT", at: 1})}
 	var authors []string
@@ -31,7 +29,7 @@ func TestThreadProjection_ParticipantPreviewKeepsFirstReplyOrder(t *testing.T) {
 	if p.summaryByThread[root].participantIndex == nil {
 		t.Fatalf("summary with %d authors has no participant index", len(authors))
 	}
-	metadata := p.ThreadMetadata("ROOT")
+	metadata := p.ThreadMetadata("ROOT", "")
 	if !slices.Equal(metadata.ParticipantIDs, authors[:maxThreadParticipants]) || metadata.ParticipantCount != len(authors) {
 		t.Fatalf("preview=%v count=%d; want first %d authors and %d", metadata.ParticipantIDs, metadata.ParticipantCount, maxThreadParticipants, len(authors))
 	}
@@ -47,12 +45,12 @@ func TestThreadProjection_ParticipantPreviewKeepsFirstReplyOrder(t *testing.T) {
 	}
 	// The preview follows first visible replies, so the first author moves to
 	// the position of their remaining reply.
-	metadata = p.ThreadMetadata("ROOT")
+	metadata = p.ThreadMetadata("ROOT", "")
 	want := authors[2 : maxThreadParticipants+2]
 	if !slices.Equal(metadata.ParticipantIDs, want) || metadata.ParticipantCount != len(authors)-1 || metadata.ReplyCount != len(authors)-1 {
 		t.Fatalf("after retractions preview=%v count=%d replies=%d; want %v, %d, %d", metadata.ParticipantIDs, metadata.ParticipantCount, metadata.ReplyCount, want, len(authors)-1, len(authors)-1)
 	}
-	if got := p.ParticipantIDs("ROOT"); len(got) != len(authors)-1 || slices.Contains(got, authors[1]) || got[len(got)-1] != authors[0] {
+	if got := p.ParticipantIDs("ROOT", ""); len(got) != len(authors)-1 || slices.Contains(got, authors[1]) || got[len(got)-1] != authors[0] {
 		t.Fatalf("ParticipantIDs = %v, want all authors except %s", got, authors[1])
 	}
 }
@@ -60,8 +58,6 @@ func TestThreadProjection_ParticipantPreviewKeepsFirstReplyOrder(t *testing.T) {
 // TestThreadProjection_FollowReadsAreSortedByID checks that follow reads do not
 // depend on follow order, which a snapshot restore does not keep.
 func TestThreadProjection_FollowReadsAreSortedByID(t *testing.T) {
-	t.Parallel()
-
 	p := NewThreadProjection()
 	for i, event := range []*evtv1.Event{
 		threadFollowSnapshotTestEvent("F0", "R1", "ROOT", "U4", true),
@@ -101,8 +97,6 @@ func TestThreadProjection_FollowReadsAreSortedByID(t *testing.T) {
 }
 
 func TestThreadProjectionSnapshotRestoreRejectsInconsistentReplies(t *testing.T) {
-	t.Parallel()
-
 	source := NewThreadProjection()
 	applyAll(t, source, []*evtv1.Event{
 		postedEvent(postedOpts{envelopeID: "ROOT", roomID: "R1", actorID: "U1", at: 1}),

@@ -1,6 +1,6 @@
 /** Exercise the release workflow's version resolution with isolated package metadata. */
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -25,6 +25,85 @@ function extractVersionScript(source) {
 }
 const versionScript = extractVersionScript(workflow);
 const sha = '1234567890abcdef1234567890abcdef12345678';
+
+for (const [name, buildStatus, copyTestStatus] of [
+  ['success', 0, 0],
+  ['signing failure', 1, 0],
+  ['mount or copy failure', 0, 1]
+]) {
+  test(`DMG publication: ${name}`, () => {
+    const script = workflow
+      .replaceAll('\r\n', '\n')
+      .split('      - name: Build and test signed macOS DMG\n')[1]
+      .split('\n      - name:')[0]
+      .split('        run: |\n')[1]
+      .split('\n')
+      .map((line) => line.slice(10))
+      .join('\n');
+    const result = spawnSync(
+      'bash',
+      [
+        '-e',
+        '-o',
+        'pipefail',
+        '-c',
+        `
+mise() {
+  [[ "$*" == 'x -- pnpm --filter chatto-desktop build:macos-dmg --release' ]] || return 99
+  return ${buildStatus}
+}
+tee() { cat; }
+bash() { return ${copyTestStatus}; }
+cp() { echo published; }
+${script}`
+      ],
+      { encoding: 'utf8' }
+    );
+    assert.equal(result.status, buildStatus || copyTestStatus, result.stderr);
+    assert.equal(result.stdout.includes('published'), buildStatus === 0 && copyTestStatus === 0);
+  });
+}
+
+// Ticket validation runs in desktop-build. Packaging must still stop on an
+// invalid signature or Gatekeeper assessment before it creates the ZIP.
+for (const [name, signatureStatus, assessmentStatus] of [
+  ['valid app', 0, 0],
+  ['invalid signature', 1, 0],
+  ['Gatekeeper rejection', 0, 1]
+]) {
+  test(`macOS release packaging: ${name}`, () => {
+    const script = workflow
+      .replaceAll('\r\n', '\n')
+      .split('      - name: Package macOS release\n')[1]
+      .split('\n      - name:')[0]
+      .split('        run: |\n')[1]
+      .split('\n')
+      .map((line) => line.slice(10))
+      .join('\n');
+    const result = spawnSync(
+      'bash',
+      [
+        '-e',
+        '-o',
+        'pipefail',
+        '-c',
+        `
+test() { return 0; }
+codesign() { return ${signatureStatus}; }
+spctl() { echo assess; return ${assessmentStatus}; }
+mkdir() { return 0; }
+ditto() { echo archive; }
+${script}`
+      ],
+      { encoding: 'utf8' }
+    );
+    const expectedStatus = signatureStatus || assessmentStatus;
+    assert.equal(result.status, expectedStatus, result.stderr);
+    const lines = result.stdout.trim().split('\n');
+    assert.equal(lines.includes('assess'), signatureStatus === 0);
+    assert.equal(lines.includes('archive'), expectedStatus === 0);
+  });
+}
 
 test('workflow extraction supports Windows checkout line endings', () => {
   const lf = workflow.replaceAll('\r\n', '\n');
@@ -125,23 +204,15 @@ test('manual verification fails without a development version', (t) => {
   );
 });
 
-test('release-please owns both version files through the Chatto component', () => {
+test('Sweet owns both version files through the Chatto package', () => {
   const root = new URL('../../../', import.meta.url);
-  const config = JSON.parse(readFileSync(new URL('.release-please-config.json', root), 'utf8'));
-  const manifest = JSON.parse(readFileSync(new URL('.release-please-manifest.json', root), 'utf8'));
-  assert.equal(config.packages['apps/desktop'], undefined);
-  assert.equal(manifest['apps/desktop'], undefined);
-  assert.ok(!config.packages['.']['exclude-paths'].includes('apps/desktop'));
+  const manifest = readFileSync(new URL('.sweet.yml', root), 'utf8').replaceAll('\r\n', '\n');
   for (const name of ['desktop', 'frontend']) {
     const packagePath = `apps/${name}/package.json`;
-    assert.ok(
-      config.packages['.']['extra-files'].some(
-        (file) => file.path === packagePath && file.jsonpath === '$.version'
-      )
-    );
+    assert.ok(manifest.includes(`path: ${packagePath}\n    format: json\n    key: version`));
     assert.equal(
       JSON.parse(readFileSync(new URL(packagePath, root), 'utf8')).version,
-      manifest['.']
+      manifest.match(/^version: (.+)$/m)[1]
     );
   }
 });

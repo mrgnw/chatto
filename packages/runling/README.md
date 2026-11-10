@@ -5,6 +5,10 @@ Run and orchestrate TypeScript workflows of any size and kind.
 See the [documentation index](docs/README.md) for API guides, architecture
 decisions (ADRs), and feature records (FDRs).
 
+The console's Log view shows one updating row per activity. Expand a row for
+recorded details, or enable **Detailed log** for the chronological diagnostic
+lines. Logs and timeline activity remain visible across workflow reactivation.
+
 ## Tasks, runs, and messages
 
 A **task** is a function with schemas. It has a name, an input schema, and an
@@ -93,8 +97,18 @@ task waits for a message, the console shows "Waiting for a message". See
 - Workflows are TypeScript functions with input and result schemas
 - Embeds the Pi SDK for easy peasy agent/LLM integration
 - Automatic monitoring of token usage and cost
+- Optional [Docker operations](docs/docker.md) for image builds, disposable commands, and services,
+  with live output, cancellation, and explicit resource cleanup
+- Private [Git worktree manifests](docs/git.md) for selecting current source files
 
 ## Run references
+
+On an interactive terminal, `runling run` shows a live task panel and task-labelled
+logs. CI and redirected output keep ordinary log lines. Use `--plain` to disable
+the panel explicitly. The panel adapts to terminal resizing and pauses when space is too small.
+It shows task nesting, input waits, and failures, then prints task counts and
+a short duration summary.
+JSON output, workflow messages, and the complete journal keep their existing behavior.
 
 Each run started by `runling serve` or `runling run` has a readable reference such as
 `brave-otters-4821`. The console shows it in the run list and provides a copy
@@ -272,21 +286,27 @@ temporary consumer project, and checks the CLI, public types, webhooks, live
 events, and web assets. It contacts the npm registry to install dependencies.
 The test does not need agent-provider credentials.
 
-Use `mise build-runling` after source changes before running a workspace
-consumer. `mise dev-full` builds Runling before it starts the Chatto bot.
+Workspace consumers import Runling's TypeScript source. Use a TypeScript loader
+such as tsx, Vite, or jiti; the CLI installs its loader automatically. No Runling
+build or special export condition is required. Workspace `serve` uses Vite for
+the console and preserves the application's working directory.
+
+Builds remain necessary for publication. Pack with pnpm so `publishConfig`
+replaces source exports with compiled JavaScript and declarations. Published
+installs serve the compiled console without Vite. See
+[ADR-013](docs/adr/ADR-013-source-workspace-exports.md).
 
 To run the bundled demos, run `mise x -- pnpm --dir packages/runling dev` from
 the monorepo root. Demos that use agents need model-provider credentials in Pi
 or in `packages/runling/.env`. Restart the server after changing `.env`.
 
-Runling has its own entry in the root release-please configuration and
-manifest. Its imported version is 0.7.0, from upstream commit
+Runling has its own `.sweet.yml` release manifest and `.sweet/` change notes. Its imported version is 0.7.0, from upstream commit
 `2fe061bc9904d4a5cb2c0db3973dbe0fbe337f1c`. The existing changelog records
 releases made in the former repository. New releases use tags such as
-`runling/v0.8.0`. Chatto releases exclude Runling package changes.
+`runling/v0.8.0`. Runling notes select only Runling releases.
 
-After CI succeeds, the root release workflow uses `RELEASE_PLEASE_PAT` to
-create release PRs and tags. A Runling tag starts `publish-runling.yml`, which
+The Prepare releases workflow creates a PR from Runling notes. After it merges
+and CI succeeds, CI creates its version tag. A Runling tag starts `publish-runling.yml`, which
 checks the version, rejects versions previously published to npm, and tests
 the package. A separate job publishes that exact tarball with npm provenance.
 Manual workflow runs only test and save the tarball.

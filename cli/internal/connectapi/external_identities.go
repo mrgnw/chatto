@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -28,11 +29,33 @@ func (s *externalIdentityAuthService) GetPendingExternalIdentity(ctx context.Con
 		return nil, err
 	}
 	if flow.Kind == core.ExternalIdentityFlowKindCreate {
-		flow.LoginHint = availableExternalIdentityLogin(s.api.core, req.Msg.GetToken(), flow.LoginHint)
+		if s.api.core.ProviderUsernameManaged(flow.ProviderID) {
+			flow.LoginHint, err = s.api.core.SuggestProviderUsername(flow.ProviderUsername)
+			if err != nil {
+				return nil, core.ErrProviderUsernameUnavailable
+			}
+		} else {
+			flow.LoginHint = availableExternalIdentityLogin(s.api.core, req.Msg.GetToken(), flow.LoginHint)
+		}
 	}
-	return connect.NewResponse(&authv1.GetPendingExternalIdentityResponse{
-		Pending: apiPendingExternalIdentity(flow),
-	}), nil
+	pending := apiPendingExternalIdentity(flow)
+	pending.ChooseUsername = authv1.UsernameChoiceAvailability_USERNAME_CHOICE_AVAILABILITY_ALLOWED.Enum()
+	if s.api.core.ProviderUsernameManaged(flow.ProviderID) {
+		pending.ChooseUsername = authv1.UsernameChoiceAvailability_USERNAME_CHOICE_AVAILABILITY_PROVIDER_MANAGED.Enum()
+	}
+	if err := s.api.core.WaitForRegistrationPolicy(ctx); err != nil {
+		return nil, err
+	}
+	if flow.Kind == core.ExternalIdentityFlowKindCreate && s.api.core.InvitationRequired() {
+		err := s.api.core.ValidateInvitationAdmission(ctx, flow.InvitationID)
+		if err != nil && !errors.Is(err, core.ErrInvitationInvalid) {
+			return nil, err
+		}
+		pending.InvitationRequired = err != nil
+	}
+	response := connect.NewResponse(&authv1.GetPendingExternalIdentityResponse{Pending: pending})
+	response.Header().Set("Cache-Control", "no-store")
+	return response, nil
 }
 
 func availableExternalIdentityLogin(chattoCore *core.ChattoCore, token, hint string) string {
@@ -61,21 +84,35 @@ func (s *externalIdentityAuthService) CreateExternalIdentityAccount(ctx context.
 	if err != nil {
 		return nil, err
 	}
-	if s.api.config.Auth.InvitationRequired() {
+	if err := s.api.core.WaitForRegistrationPolicy(ctx); err != nil {
+		return nil, err
+	}
+	if s.api.core.InvitationRequired() {
+		// An explicit code replaces the captured invitation for this attempt,
+		// including when the captured invitation is no longer usable.
+		if req.Msg.GetInvitationCode() != "" {
+			flow.InvitationID, err = s.api.core.ValidateInvitationCode(ctx, req.Msg.GetInvitationCode())
+			if err != nil {
+				return nil, err
+			}
+		}
 		if strings.TrimSpace(flow.InvitationID) == "" {
 			return nil, core.ErrInvitationInvalid
 		}
-	} else {
-		// Pending flows survive configuration rollouts. Re-evaluate admission
-		// now, and never redeem an invitation while the server is open.
-		flow.InvitationID = ""
 	}
-	displayName := externalIdentityCreateDisplayName(req.Msg.GetLogin(), req.Msg.GetDisplayName(), flow.DisplayNameHint)
+	// Leave the fallback empty for managed names. Core uses the actual assigned
+	// username, including any collision suffix, when it creates the account.
+	fallbackLogin := req.Msg.GetLogin()
+	if s.api.core.ProviderUsernameManaged(flow.ProviderID) {
+		fallbackLogin = ""
+	}
+	displayName := externalIdentityCreateDisplayName(fallbackLogin, req.Msg.GetDisplayName(), flow.DisplayNameHint)
 	user, err := s.api.core.CreateUserForExternalIdentity(ctx, req.Msg.GetLogin(), displayName, flow)
 	if err != nil {
 		return nil, err
 	}
 	// The account is committed. A failed sync is repeated at the next sign-in.
+	completeRegistrationAdmission(ctx, flow.InvitationID)
 	if provider, ok := s.api.authProvider(flow.ProviderID); ok {
 		groups := core.ProviderGroups{Groups: flow.Groups, Known: flow.GroupsKnown}
 		if err := s.api.core.SyncProviderGroupRoles(ctx, user.GetId(), core.ProviderRoleSource{ProviderID: provider.ID, Issuer: flow.Issuer, Subject: flow.Subject}, provider.GroupRoleMappings(), groups); err != nil {
@@ -184,13 +221,9 @@ func (s *accountService) ListExternalIdentities(ctx context.Context, _ *connect.
 	if err != nil {
 		return nil, err
 	}
-	policy := s.api.externalIdentitySignInPolicy()
 	linked := apiLinkedExternalIdentities(identities, s.api.providerLabels())
-	for _, identity := range linked {
-		identity.DisconnectEligibility = apiv1.DisconnectEligibility_DISCONNECT_ELIGIBILITY_LAST_ENABLED_SIGN_IN_METHOD
-		if policy.CanDisconnect(identity.SubjectHash, identities, hasPassword) {
-			identity.DisconnectEligibility = apiv1.DisconnectEligibility_DISCONNECT_ELIGIBILITY_ALLOWED
-		}
+	for index, identity := range linked {
+		identity.DisconnectEligibility = disconnectAvailability(s.api, identities[index], identities, hasPassword)
 	}
 	return connect.NewResponse(&apiv1.ListExternalIdentitiesResponse{
 		Providers:        apiExternalIdentityProviders(s.api.config.Auth.PublicProviders(), identities),

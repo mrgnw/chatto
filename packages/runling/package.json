@@ -21,48 +21,15 @@
       "./dist/extensions/web-fetch.js"
     ]
   },
-  "types": "./dist/src/runtime/index.d.ts",
+  "types": "./src/runtime/index.ts",
   "exports": {
-    ".": {
-      "runling-source": "./src/runtime/index.ts",
-      "types": "./dist/src/runtime/index.d.ts",
-      "default": "./dist/src/runtime/index.js"
-    },
-    "./server": {
-      "runling-source": "./src/runtime/web-server.ts",
-      "types": "./dist/src/runtime/web-server.d.ts",
-      "default": "./dist/src/runtime/web-server.js"
-    },
-    "./git": {
-      "runling-source": "./src/runtime/git.ts",
-      "types": "./dist/src/runtime/git.d.ts",
-      "default": "./dist/src/runtime/git.js"
-    },
-    "./web": {
-      "runling-source": "./src/runtime/web-config.ts",
-      "types": "./dist/src/runtime/web-config.d.ts",
-      "default": "./dist/src/runtime/web-config.js"
-    },
-    "./config-reloader": {
-      "runling-source": "./src/runtime/config-reloader.ts",
-      "types": "./dist/src/runtime/config-reloader.d.ts",
-      "default": "./dist/src/runtime/config-reloader.js"
-    },
-    "./extensions/trust": {
-      "runling-source": "./extensions/trust.ts",
-      "types": "./dist/extensions/trust.d.ts",
-      "default": "./dist/extensions/trust.js"
-    }
-  },
-  "imports": {
-    "#runner": {
-      "runling-source": "./src/runtime/runner.ts",
-      "default": "./dist/src/runtime/runner.js"
-    },
-    "#cli": {
-      "runling-source": "./src/runtime/cli.ts",
-      "default": "./dist/src/runtime/cli.js"
-    }
+    ".": "./src/runtime/index.ts",
+    "./server": "./src/runtime/web-server.ts",
+    "./git": "./src/runtime/git.ts",
+    "./docker": "./src/runtime/docker.ts",
+    "./web": "./src/runtime/web-config.ts",
+    "./config-reloader": "./src/runtime/config-reloader.ts",
+    "./extensions/trust": "./extensions/trust.ts"
   },
   "files": [
     "dist",
@@ -74,18 +41,20 @@
   },
   "scripts": {
     "prepare": "svelte-kit sync",
-    "runling": "node --conditions=runling-source bin/runling.js",
-    "dev": "tsx watch --conditions=runling-source src/bin/runling-web.ts",
+    "runling": "node bin/runling.js",
+    "dev": "tsx watch bin/runling.js serve",
     "dev:web": "pnpm dev",
-    "build": "pnpm build:runtime && vite build",
-    "build:runtime": "tsc -p tsconfig.build.json",
-    "test": "pnpm build:runtime && svelte-kit sync && vitest run",
+    "build": "pnpm build:runtime && node --import tsx node_modules/vite/bin/vite.js build",
+    "build:runtime": "svelte-kit sync && tsc -p tsconfig.build.json",
+    "test": "pnpm build:runtime && vitest run",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "test:package": "node scripts/test-package.mjs",
-    "test:server": "node scripts/test-server.mjs",
+    "test:server": "node --import tsx scripts/test-server.mjs",
+    "test:docker": "RUNLING_TEST_DOCKER=1 vitest run src/runtime/docker.integration.test.ts",
     "prepack": "node -e \"for (const file of ['dist/src/runtime/index.js', 'dist/src/runtime/index.d.ts', 'dist/web/handler.js']) { if (!require('node:fs').existsSync(file)) throw new Error('Run pnpm build before packing Runling'); }\""
   },
   "dependencies": {
+    "@bomb.sh/tty": "^0.10.0",
     "@earendil-works/pi-coding-agent": "1.3.0",
     "@earendil-works/pi-tui": "1.3.0",
     "@standard-schema/spec": "^1.1.0",
@@ -102,7 +71,6 @@
   },
   "devDependencies": {
     "@earendil-works/pi-ai": "1.3.0",
-    "@fontsource-variable/plus-jakarta-sans": "^5.3.0",
     "@iconify-json/lucide": "^1.2.129",
     "@iconify/tailwind4": "^1.2.3",
     "@sveltejs/adapter-node": "^5",
@@ -119,9 +87,44 @@
     "tailwindcss": "^4.3.3",
     "typescript": "~5.9.3",
     "valibot": "^1.4.2",
+    "virtua": "0.54.1",
     "vite": "^7",
     "vitest": "^3.2.0",
     "yaml": "^2.8.0",
     "zod": "^4.5.4"
+  },
+  "publishConfig": {
+    "access": "public",
+    "types": "./dist/src/runtime/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/src/runtime/index.d.ts",
+        "default": "./dist/src/runtime/index.js"
+      },
+      "./server": {
+        "types": "./dist/src/runtime/web-server.d.ts",
+        "default": "./dist/src/runtime/web-server.js"
+      },
+      "./git": {
+        "types": "./dist/src/runtime/git.d.ts",
+        "default": "./dist/src/runtime/git.js"
+      },
+      "./docker": {
+        "types": "./dist/src/runtime/docker.d.ts",
+        "default": "./dist/src/runtime/docker.js"
+      },
+      "./web": {
+        "types": "./dist/src/runtime/web-config.d.ts",
+        "default": "./dist/src/runtime/web-config.js"
+      },
+      "./config-reloader": {
+        "types": "./dist/src/runtime/config-reloader.d.ts",
+        "default": "./dist/src/runtime/config-reloader.js"
+      },
+      "./extensions/trust": {
+        "types": "./dist/extensions/trust.d.ts",
+        "default": "./dist/extensions/trust.js"
+      }
+    }
   }
 }

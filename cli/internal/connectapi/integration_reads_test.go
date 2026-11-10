@@ -16,8 +16,6 @@ import (
 )
 
 func TestIntegrationRelationshipReads(t *testing.T) {
-	t.Parallel()
-
 	env := newConnectAPITestEnv(t)
 	room := env.createJoinedRoom("relationship-reads")
 	root := env.post(room.Id, env.viewer.Id, "root", "")
@@ -34,6 +32,7 @@ func TestIntegrationRelationshipReads(t *testing.T) {
 		require.NoError(t, err)
 	}
 	slices.Sort(ids)
+	participantIDs := ids
 	for _, offset := range []int32{0, 4, 7} {
 		page := &apiv1.PageRequest{Limit: 4, Offset: offset}
 		reactions, err := env.messages.ListReactionUsers(ctx, connect.NewRequest(&apiv1.ListReactionUsersRequest{RoomId: room.Id, MessageEventId: root.Id, Emoji: "thumbsup", Page: page}))
@@ -42,7 +41,7 @@ func TestIntegrationRelationshipReads(t *testing.T) {
 		require.NoError(t, err)
 		want := ids[int(offset):min(int(offset)+4, len(ids))]
 		require.Equal(t, want, reactions.Msg.UserIds)
-		require.Equal(t, want, participants.Msg.UserIds)
+		require.Equal(t, participantIDs[int(offset):min(int(offset)+4, len(participantIDs))], participants.Msg.UserIds)
 		require.EqualValues(t, 7, reactions.Msg.Page.TotalCount)
 		require.EqualValues(t, 7, participants.Msg.Page.TotalCount)
 		require.Equal(t, offset == 0, reactions.Msg.Page.HasMore)
@@ -60,8 +59,6 @@ func TestIntegrationRelationshipReads(t *testing.T) {
 }
 
 func TestIntegrationReadMarkers(t *testing.T) {
-	t.Parallel()
-
 	env := newConnectAPITestEnv(t)
 	room, err := env.core.CreateRoom(env.ctx, env.viewer.Id, core.KindChannel, "", "marker-reads", "", core.WithUniversalRoom(true))
 	require.NoError(t, err)
@@ -108,8 +105,6 @@ func TestIntegrationReadMarkers(t *testing.T) {
 }
 
 func TestIntegrationReactionAliasesAndRetractions(t *testing.T) {
-	t.Parallel()
-
 	env := newConnectAPITestEnv(t)
 	room := env.createJoinedRoom("relationship-alias")
 	ctx := withCaller(env.ctx, env.viewer)
@@ -134,8 +129,6 @@ func TestIntegrationReactionAliasesAndRetractions(t *testing.T) {
 }
 
 func TestIntegrationReadsThroughJSON(t *testing.T) {
-	t.Parallel()
-
 	env := newConnectAPITestEnv(t)
 	room := env.createJoinedRoom("json-reads")
 	root := env.post(room.Id, env.viewer.Id, "root", "")

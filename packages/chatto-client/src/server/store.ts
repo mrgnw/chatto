@@ -356,6 +356,13 @@ export class ServerStateStore {
       presence: this.presence,
       realtimeViewerId: () => this.realtimeViewerId(),
       viewerId: () => this.viewerId,
+      canResolveMentions: (roomId) =>
+        !this.#realtimeSnapshotPending &&
+        !this.checkingPermissions &&
+        Boolean(this.projection.rooms.get(roomId)?.viewerState?.isMember),
+      canDisplayMentions: (roomId) =>
+        !this.checkingPermissions &&
+        Boolean(this.projection.rooms.get(roomId)?.viewerState?.isMember),
       projectedMemberIds: (roomId) => {
         // Only a DM projection lists every member of its room.
         const room = this.projection.rooms.get(roomId);
@@ -390,7 +397,9 @@ export class ServerStateStore {
 
   /** Change privilege activation and reconcile effective viewer permissions in
    * place. Mutations run in call order; deactivation can proceed while an earlier
-   * projection refresh is pending. Each caller still waits for refreshed state. */
+   * projection refresh is pending. Each caller waits for recovery for up to
+   * 30 seconds. A recovery timeout keeps sync stale but does not undo a committed
+   * mutation or report that the mutation failed. */
   async setPrivilegedMode(active: boolean): Promise<void> {
     const change = this.#privilegedModeChanges.then(() => this.changePrivilegedMode(active));
     // The caller receives this change's error. A failed change must not block
@@ -469,10 +478,17 @@ export class ServerStateStore {
     this.#emitAuthorityChanged({ lost: viewerAuthorizationLost(previousViewer, response) });
   }
 
-  /** Reject work whose resource boundary was superseded by a newer reset. */
-  private requireCurrentRealtimeProjection(generation: number): void {
+  /** Reject work from an older resource boundary or, for catch-up reads, an
+   * older transport. Event-driven reads can belong to successive transports. */
+  private requireCurrentRealtimeProjection(generation: number, transportGeneration?: number): void {
     if (generation !== this.#realtimeProjectionGeneration) {
       throw new Error('realtime projection read was superseded by a newer reset');
+    }
+    if (
+      transportGeneration !== undefined &&
+      transportGeneration !== this.realtimeSync.transportGeneration
+    ) {
+      throw new Error('realtime catch-up was superseded by a newer transport');
     }
   }
 
@@ -513,7 +529,7 @@ export class ServerStateStore {
     ).finally(() => {
       this.#catchUpResourceReads--;
     });
-    this.requireCurrentRealtimeProjection(generation);
+    this.requireCurrentRealtimeProjection(generation, transportGeneration);
     batch(() => {
       for (const resource of batches.flat()) {
         this.publishProjectionUpdate(new RealtimeProjectionUpdate({ resource }));
@@ -545,7 +561,7 @@ export class ServerStateStore {
       );
       const presenceReadVersion = this.presence.version;
       const userResources = await this.#realtimeResources.readUsers(userIds, cursor);
-      this.requireCurrentRealtimeProjection(generation);
+      this.requireCurrentRealtimeProjection(generation, transportGeneration);
       const returnedUserIds = new Set(
         userResources.flatMap((resource) =>
           resource.resource.case === 'users'
@@ -578,22 +594,29 @@ export class ServerStateStore {
           .map((store) =>
             store.hydrateRealtimeProjection(
               cursor,
-              () => generation === this.#realtimeProjectionGeneration,
+              () =>
+                generation === this.#realtimeProjectionGeneration &&
+                transportGeneration === this.realtimeSync.transportGeneration,
               true
             )
           )
       );
-      this.requireCurrentRealtimeProjection(generation);
-      // Retained channel membership can have been read before this snapshot.
-      // Recheck it at the snapshot cursor before declaring the view current.
-      await Promise.all(
-        this.#rooms.all('members').map((store) => store.refresh({ minimumCursor: cursor }))
+      this.requireCurrentRealtimeProjection(generation, transportGeneration);
+      // Recheck retained membership before declaring an existing view current.
+      // On cold entry, navigation can already have created member stores. Their
+      // full scans must not delay the room's first message read. refresh owns
+      // read errors and reset/disposal discards results from an obsolete scan.
+      const memberRefreshes = this.accessibleMemberStores().map((store) =>
+        store.refresh({ minimumCursor: cursor })
       );
-      this.requireCurrentRealtimeProjection(generation);
+      if (this.realtimeSync.hasDisplayableView) await Promise.all(memberRefreshes);
+      this.requireCurrentRealtimeProjection(generation, transportGeneration);
+      for (const members of this.#rooms.all('members')) members.refreshMentions(cursor);
       this.#realtimeSnapshotPending = false;
+      this.loadPendingRoomMembers();
     }
     await this.waitForRealtimeReconciliation(transportGeneration);
-    this.requireCurrentRealtimeProjection(generation);
+    this.requireCurrentRealtimeProjection(generation, transportGeneration);
   }
 
   /** Reuse the mutation's viewer permissions and refresh only access-dependent
@@ -605,7 +628,7 @@ export class ServerStateStore {
     const generation = this.#realtimeProjectionGeneration;
     const transportGeneration = this.realtimeSync.transportGeneration;
     const requireCurrent = () => {
-      this.requireCurrentRealtimeProjection(generation);
+      this.requireCurrentRealtimeProjection(generation, transportGeneration);
       if (
         authorizationRefreshGeneration !== this.realtimeSync.pendingAuthorizationRefreshGeneration
       ) {
@@ -697,6 +720,15 @@ export class ServerStateStore {
     if (!room || room.archived) throw new Error('Conversation is unavailable');
   }
 
+  /** Read a message from existing timelines without creating stores or making requests. */
+  knownMessage(roomId: string, messageId: string) {
+    for (const timeline of this.#rooms.timelines(roomId)) {
+      const event = timeline.getEventById(messageId);
+      if (event) return event;
+    }
+    return undefined;
+  }
+
   /** Return known follow state from a loaded canonical room timeline. */
   loadedThreadFollowState(roomId: string, threadRootEventId: string): boolean | null {
     const event = this.#rooms.loaded(roomId)?.messages?.getEventById(threadRootEventId);
@@ -749,6 +781,11 @@ export class ServerStateStore {
     void this.#rooms.loaded(roomId)?.messages?.restoreLatestWindow();
   }
 
+  /** Cancel a room's pending historical jump without creating a timeline or fetching messages. */
+  cancelProjectedRoomJump(roomId: string): void {
+    this.#rooms.loaded(roomId)?.messages?.cancelPendingHistoricalJump();
+  }
+
   private updateRoomMembership(roomId: string, userId: string, joined: boolean): void {
     const store = this.#rooms.loaded(roomId)?.members;
     if (!store) return;
@@ -758,15 +795,62 @@ export class ServerStateStore {
     );
   }
 
+  /** Request a directory for a consumer; recovery can complete the load later. */
+  loadRoomMembers(roomId: string): void {
+    const members = this.#rooms.members(roomId);
+    members.ensureLoaded({
+      defer:
+        this.#realtimeSnapshotPending ||
+        this.checkingPermissions ||
+        !this.projection.rooms.get(roomId)?.viewerState?.isMember
+    });
+  }
+
+  /** Consumers can request a directory while recovery awaits its earlier reads. */
+  private loadPendingRoomMembers(): void {
+    if (this.#realtimeSnapshotPending || this.checkingPermissions) return;
+    for (const members of this.#rooms.all('members')) members.resumeMentions();
+    for (const members of this.accessibleMemberStores()) members.ensureLoaded();
+  }
+
+  /** Only requested directories need refreshes; a request does not grant room access. */
+  private accessibleMemberStores() {
+    return this.#rooms
+      .entries()
+      .flatMap(([roomId, { members }]) =>
+        members &&
+        members.hasRequestedList &&
+        this.projection.rooms.get(roomId)?.viewerState?.isMember
+          ? [members]
+          : []
+      );
+  }
+
+  /** Recovery owns its refresh; ordinary membership changes refresh the cached list. */
+  private invalidateRoomMembership(roomId: string): void {
+    const members = this.#rooms.loaded(roomId)?.members;
+    if (!members) return;
+    members.resetProjectionState(this.#currentEventMinimumCursor);
+    members.resumeMentions();
+    if (!members.hasRequestedList) return;
+    if (this.#realtimeSnapshotPending || this.checkingPermissions) return;
+    if (!this.projection.rooms.get(roomId)?.viewerState?.isMember) return;
+    this.trackProjectionReconciliation(
+      members.refresh({ minimumCursor: this.#currentEventMinimumCursor }),
+      this.#realtimeProjectionGeneration
+    );
+  }
+
   /** Universal membership depends on server authorization, not only join facts. */
   private invalidateUniversalMembership(): void {
     for (const [id, room] of this.projection.rooms) {
-      if (room.room?.universal) this.#rooms.loaded(id)?.members?.resetProjectionState();
+      if (room.room?.universal) this.invalidateRoomMembership(id);
     }
   }
 
   /** Scrub every plaintext timeline mirror for a room at an authorization boundary. */
   private clearRoomAccess(roomId: string, forgetStores = false, invitationId?: string): void {
+    this.#rooms.loaded(roomId)?.notice?.reset(true);
     this.#rooms.loaded(roomId)?.members?.resetProjectionState();
     this.projection.removeRoomCalls(roomId);
     if (this.notifications.clearRoom(roomId, invitationId)) {
@@ -793,8 +877,12 @@ export class ServerStateStore {
     this.#rooms.clearMessageAccess(roomId, forgetStores);
   }
 
-  /** Reacquire only mounted stores that were previously scrubbed for access loss. */
+  /** Reacquire cached members and mounted resources after access returns. */
   private restoreRoomAccess(roomId: string): void {
+    const members = this.#rooms.loaded(roomId)?.members;
+    members?.resumeMentions();
+    if (members?.hasRequestedList) this.loadRoomMembers(roomId);
+    this.#rooms.loaded(roomId)?.notice?.restoreAccess();
     this.notifications.restoreRoom(roomId);
     this.#rooms.restoreAccess(roomId);
     this.#events.roomAccessRestored.emit(roomId);
@@ -937,6 +1025,11 @@ export class ServerStateStore {
     const check = ++this.#permissionCheckGeneration;
     const generation = this.#realtimeProjectionGeneration;
     this.checkingPermissions = true;
+    // Mention-only caches have no directory to reauthorize, but their searches
+    // and in-flight responses must still cross this permission boundary.
+    for (const members of this.#rooms.all('members')) {
+      if (!members.hasRequestedList) members.resetProjectionState();
+    }
     const current = () =>
       check === this.#permissionCheckGeneration &&
       generation === this.#realtimeProjectionGeneration;
@@ -994,7 +1087,7 @@ export class ServerStateStore {
       if (!current()) return;
       this.invalidateUniversalMembership();
       await Promise.all(
-        this.#rooms.all('members').map((store) => store.refresh({ reauthorize: true }))
+        this.accessibleMemberStores().map((store) => store.refresh({ reauthorize: true }))
       );
       // Each cache must complete its own check before a partial failure is
       // reported to the cursor owner for retry.
@@ -1007,7 +1100,10 @@ export class ServerStateStore {
         if (current()) this.#reconciliationError ??= error;
       })
       .finally(() => {
-        if (current()) this.checkingPermissions = false;
+        if (current()) {
+          this.checkingPermissions = false;
+          this.loadPendingRoomMembers();
+        }
         this.#projectionReconciliations.delete(refresh);
       });
     this.#projectionReconciliations.add(refresh);
@@ -1336,6 +1432,9 @@ export class ServerStateStore {
         this.scrubRemovedUser(userId);
         return;
       }
+      case 'userAccountDeactivationChanged':
+        this.projection.users.setDeactivated(payload.value.userId, payload.value.deactivated);
+        return;
       case 'roomDeleted':
         this.projection.removeRoom(payload.value.roomId);
         this.scrubRemovedRoom(payload.value.roomId);
@@ -1348,6 +1447,9 @@ export class ServerStateStore {
         this.#timelines.refreshWindows(roomId, event.id || null);
         this.refreshRealtimeResource('rooms');
         this.refreshRealtimeResource('roomGroups');
+        return;
+      case 'roomNoticeChanged':
+        this.#rooms.loaded(payload.value.roomId)?.notice?.invalidate(event.cursor);
         return;
       case 'messagePosted':
       case 'messageEdited':
@@ -1425,9 +1527,10 @@ export class ServerStateStore {
       case 'roomUniversalChanged':
       case 'roomSlowModeChanged':
       case 'roomThreadingModeChanged':
+      case 'roomMembershipEventsVisibilityChanged':
       case 'userJoinedRoom':
         if (payload.case === 'roomUniversalChanged' && roomId) {
-          this.#rooms.loaded(roomId)?.members?.resetProjectionState();
+          this.invalidateRoomMembership(roomId);
           // Effective membership can expose a call that started before access.
           this.refreshRealtimeResource('activeCalls');
         }

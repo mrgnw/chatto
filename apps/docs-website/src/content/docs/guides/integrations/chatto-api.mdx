@@ -29,6 +29,24 @@ methods.
 
 Do not expose the Operator API over a network.
 
+## Role Metadata and Permission Decisions
+
+`chatto.admin.v1.AdminRole` contains role metadata and optional aggregate counts.
+It no longer includes the `permissions` and `permission_denials` arrays. This
+also applies to roles returned by `AdminUserService.GetMember`.
+
+If your integration used these arrays, read decisions through
+[`AdminPermissionService`](/reference/connectrpc-api/admin-permissions/):
+
+- Use `GetRolePermissionMatrix` to read one role's complete matrix.
+- Use `ListRolePermissionDecisions` to read decision rows in scope pages.
+- Set the scope to `SERVER` to replace the former server-level arrays.
+
+These role-permission reads require `role.manage`. An authenticated caller
+without that permission can read role metadata but cannot read the former
+permission summary. Role assignment limits remain available through the role
+assignment APIs.
+
 ## Start With Server Discovery
 
 Call `ServerDiscoveryService.GetServer` first. It returns the server identity,
@@ -158,6 +176,11 @@ Do not send `scope` or `resource`, and do not send `scope=openid`. Chatto uses
 scopes only for MCP, and this flow does not return an ID token. Chatto handles
 sign-in and consent. Then it redirects to your callback with `code`, `state`,
 and `iss`, or with an OAuth error.
+
+To start account creation, add `screen_hint=signup` to the authorization
+request. The server opens registration and resumes authorization after signup.
+This hint does not bypass registration or invitation rules. Older servers can
+ignore the hint and show their sign-in page instead.
 
 ### Validate the Callback and Exchange the Code
 
@@ -359,6 +382,15 @@ unordered lists, and GFM pipe tables with alignment markers.
 Bodies can also contain timestamp tokens such as `<t:UNIX_SECONDS:F>`. Show a
 valid token as that UTC instant in the viewer's locale and time zone. If your
 client does not support timestamps, show the token unchanged.
+
+The bundled frontend offers Source and Render tabs for `mermaid`, `svg`, and
+`ansi` fences. Add `rendered` after the language to show only the visual, without
+tabs or a toolbar. Click an SVG or Mermaid image to open the large viewer.
+Plain fences present code with a preview option.
+Mermaid uses Pele, and SVG uses isolated images. Keep the
+source unchanged when sending, editing, quoting, or copying messages. Clients
+without these renderers can show the code. See [Format Messages](/reference/message-syntax/)
+for syntax and rendering limits. Rendering does not require an external service.
 
 ## Programmatic Safety
 

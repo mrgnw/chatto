@@ -1,4 +1,6 @@
 <script lang="ts">
+  import { userPreferences } from '$lib/state/userPreferences.svelte';
+  import { timelineShiftsFromEnd } from '$lib/state/room/timelineShift';
   import { onDestroy, tick, untrack } from 'svelte';
   import type { Attachment } from 'svelte/attachments';
   import {
@@ -16,10 +18,11 @@
   import { getLocale } from '$lib/i18n/runtime';
   import {
     isMessagePostedEvent,
+    TimelineEventKind,
     type TimelineEventView
   } from '@chatto/client/timeline/timelineEvents';
   import type { MessagesStore, RoomMember } from '$lib/state/room';
-  import { getComposerContext, getRoomMembers, getRoomPermissions } from '$lib/state/room';
+  import { getComposerContext, getRoomMentionMembers, getRoomPermissions } from '$lib/state/room';
   import type { UserAvatarUserView } from '@chatto/client/timeline/users';
   import RoomEvent from './RoomEvent.svelte';
   import MessageUserOverlays from './MessageUserOverlays.svelte';
@@ -149,7 +152,7 @@
   const jumpState = composerContext.jumpState;
   const isLoading = $derived(messageStore.isInitialLoading);
   const loadError = $derived(messageStore.loadError);
-  // Stays true one frame after a page, so virtua's `shift` keeps the position.
+  // Includes the settling frame so pagination cannot start another page too early.
   const isLoadingMore = $derived(isLoadingOlder(messageStore));
   const hasReachedStart = $derived(messageStore.hasReachedStart);
   const isJumpedMode = $derived(jumpState.isJumpedMode);
@@ -160,9 +163,12 @@
   const stores = serverScope.store;
   const currentUser = $derived(stores.currentUser);
   const serverInfo = $derived(stores.serverInfo);
-  const roomMembers = $derived(getRoomMembers());
+  const roomMembers = $derived(getRoomMentionMembers());
   const userInteractions = new MessageUserInteractionState(() => roomMembers);
   const isUniversal = $derived(stores.projection?.rooms?.get(roomId)?.room?.universal ?? false);
+  const showMembershipEvents = $derived(
+    stores.projection?.rooms?.get(roomId)?.room?.showMembershipEvents ?? true
+  );
   const canStartDMs = $derived(stores.permissions?.canStartDMs ?? false);
   // Message action overlays live outside the virtualized rows, so they stay open when
   // the row of their message unmounts.
@@ -203,8 +209,28 @@
       return true;
     })
   );
+  // Apply display settings after structural filtering, retaining the original
+  // window for unread boundaries and pagination through entirely hidden pages.
+  const activityFilteredEvents = $derived(
+    timelineEvents.filter((event) => {
+      switch (event.event?.kind) {
+        case TimelineEventKind.UserJoinedRoom:
+        case TimelineEventKind.UserLeftRoom:
+          // SystemEventGroup omits membership activity without a visible actor.
+          return showMembershipEvents && !!event.actor && !event.actor.deleted;
+        case TimelineEventKind.RoomCreated:
+        case TimelineEventKind.RoomUpdated:
+        case TimelineEventKind.RoomDeleted:
+          // SystemEvent renders no row for these events. They must not own
+          // date headers or break message groups when a message is deleted.
+          return false;
+        default:
+          return true;
+      }
+    })
+  );
   let filteredEvents = $derived(
-    showTombstones ? timelineEvents : visibleTombstoneEvents(timelineEvents)
+    showTombstones ? activityFilteredEvents : visibleTombstoneEvents(activityFilteredEvents)
   );
   // The message that owns the open action overlay, while the timeline shows it as a message.
   const actionOverlayEvent = $derived.by(() => {
@@ -236,6 +262,11 @@
   let virtualItems = $derived(
     buildVirtualItems(eventsWithMeta, effectiveUnreadAfterEventId, hasReachedStart, showStartMarker)
   );
+
+  // `shift` describes a data change, not an in-flight request. A live append
+  // during an older-page read must still be measured from the start.
+  const shiftsFromEnd = $derived(timelineShiftsFromEnd(messageStore));
+  const shift = $derived(shiftsFromEnd && isLoadingMore);
 
   // A failed reconnect reload keeps its retained rows visible. A missing thread
   // root or lost read access shows the empty message: a retry cannot fix them.
@@ -272,7 +303,9 @@
   $effect(() => {
     const currentTimelineKey = timelineKey;
     const jumped = isJumpedMode;
-    const newestId = timelineEvents.at(-1)?.id ?? null;
+    // Hidden membership activity does not announce new messages. Keep deleted
+    // placeholders in this boundary, even when their rows have no visible context.
+    const newestId = activityFilteredEvents.at(-1)?.id ?? null;
     untrack(() => {
       if (viewport.enterRoom(currentTimelineKey)) {
         expandedSystemEventIds.clear();
@@ -614,7 +647,9 @@
       },
       scroll: () => {
         if (!scrollContainer) return;
-        safeScrollToIndex(virtualItems.length - 1, { align: 'end' });
+        // This loop owns measurement retries and stops on user input. A virtua
+        // scrollToIndex request can keep retrying after that input and move the
+        // reader back to the bottom.
         scrollContainer.scrollTop = scrollContainer.scrollHeight;
         scrollFader?.refresh();
       },
@@ -645,6 +680,21 @@
       viewport.isUnreadEntryLandingRunning ||
       Boolean(recoveryViewport(messageStore))
   });
+
+  function handleVirtualizerResize(): void {
+    // Font changes and late media measurements can grow rows without resizing
+    // the scroll container. Reuse the cancellable convergence loop for them.
+    if (
+      viewport.shouldScrollToBottom &&
+      !isJumpedMode &&
+      !isLoadingMore &&
+      !scrollToEventId &&
+      !pendingHighlightId &&
+      !viewport.isUnreadEntryLandingRunning
+    ) {
+      void requestBottomScroll();
+    }
+  }
 
   // Auto-scroll to bottom when new events arrive or existing events update.
   // shouldScrollToBottom is read via untrack() so toggling it doesn't re-trigger
@@ -789,6 +839,7 @@
   }
 
   async function loadOlderIfTimelineNeedsBackfill(): Promise<void> {
+    if (destroyed) return;
     if (stores.realtimeSync.isRecoveringSnapshot || recoveryViewport(messageStore)) return;
     if (
       isLoading ||
@@ -801,18 +852,22 @@
     }
 
     underfilledBackfillInFlight = true;
+    const previousEvents = events;
+    let loaded = false;
     try {
-      // A fetched page can consist entirely of context-free tombstones. There is no
+      // A fetched page can consist entirely of hidden activity or tombstones. There is no
       // Virtualizer in that state, but pagination still needs to walk backward
       // until it finds visible history or reaches the beginning.
       if (timelineEvents.length > 0 && filteredEvents.length === 0) {
         await loadOlder(messageStore);
+        loaded = true;
         return;
       }
 
       await tick();
       await new Promise((resolve) => requestAnimationFrame(resolve));
       if (
+        destroyed ||
         !virtualizerHandle ||
         isLoading ||
         isLoadingMore ||
@@ -831,9 +886,15 @@
         messageEventCount < INITIAL_ROOM_MESSAGE_BACKFILL_TARGET;
       if (scrollSize <= viewportSize + 50 || lacksInitialRoomMessages) {
         await loadOlder(messageStore);
+        loaded = true;
       }
     } finally {
       underfilledBackfillInFlight = false;
+      // The reactive check can run before this guard clears. Continue after a
+      // changed window, but do not retry failed or declined loads without progress.
+      if (loaded && !destroyed && events !== previousEvents) {
+        void loadOlderIfTimelineNeedsBackfill();
+      }
     }
   }
 
@@ -968,7 +1029,7 @@
     bottom
     bind:this={scrollFader}
     bind:scrollEl={scrollContainer}
-    scrollClass="overscroll-y-contain"
+    scrollClass="overscroll-y-contain [overflow-anchor:none]"
     data-testid="messages-container"
     onwheel={markUserScrollIntent}
     ontouchmove={markUserScrollIntent}
@@ -1000,11 +1061,12 @@
           data={virtualItems}
           getKey={(item, index) => item?.key ?? `__ix_${index}`}
           scrollRef={scrollContainer}
-          shift={isLoadingMore}
+          {shift}
           itemSize={60}
           {keepMounted}
           itemProps={({ item }) => ({ [TIMELINE_ITEM_KEY_ATTRIBUTE]: item?.key })}
           onscroll={handleVirtuaScroll}
+          onresize={handleVirtualizerResize}
         >
           {#snippet children(item: VirtualItem)}
             {#if !item}
@@ -1065,7 +1127,7 @@
 
   {#if !viewport.shouldScrollToBottom}
     <button
-      transition:fade={{ duration: 150 }}
+      transition:fade={{ duration: userPreferences.reducedMotion ? 0 : 150 }}
       onclick={isJumpedMode ? handleJumpToPresentClick : scrollToBottom}
       data-testid="jump-to-present"
       class="absolute bottom-4 left-1/2 z-40 -translate-x-1/2 cursor-pointer menu whitespace-nowrap"

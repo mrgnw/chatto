@@ -527,14 +527,14 @@ func (c *compactProjections) digest(t *testing.T, h *compactHistory) string {
 
 	th := c.threads
 	for _, id := range h.messages {
-		metadata := th.ThreadMetadata(id)
+		metadata := th.ThreadMetadata(id, "")
 		lastReply := "<nil>"
 		if metadata.LastReplyAt != nil {
 			lastReply = metadata.LastReplyAt.String()
 		}
 		line("thread %s: events=%+v exists=%v replies=%d metadata=%v,%d,%s,%d,%v,%s participants=%v",
 			id, th.ThreadEvents(id), th.ThreadExists(id), th.ReplyCount(id), metadata.Exists, metadata.ReplyCount,
-			metadata.LatestReplyEventID, metadata.ParticipantCount, metadata.ParticipantIDs, lastReply, th.ParticipantIDs(id))
+			metadata.LatestReplyEventID, metadata.ParticipantCount, metadata.ParticipantIDs, lastReply, th.ParticipantIDs(id, ""))
 		for _, roomID := range h.rooms {
 			root, ok := th.ThreadRootForMessage(roomID, id)
 			line("thread root %s in %s: %s %v followers=%v", id, roomID, root, ok, th.ThreadFollowers(roomID, id))
@@ -612,8 +612,6 @@ func (c *compactProjections) digest(t *testing.T, h *compactHistory) string {
 }
 
 func TestCompactProjectionsAgreeAcrossTablesSnapshotsAndRestores(t *testing.T) {
-	t.Parallel()
-
 	for seed := range uint64(6) {
 		t.Run(fmt.Sprintf("seed_%d", seed), func(t *testing.T) {
 			h := generateCompactHistory(seed, 300)
@@ -655,8 +653,6 @@ func TestCompactProjectionsAgreeAcrossTablesSnapshotsAndRestores(t *testing.T) {
 // equivalence after CompleteStartupReplay switches the replay guards from
 // event IDs to stream sequences.
 func TestCompactProjectionsSurviveRestoreAfterStartupReplay(t *testing.T) {
-	t.Parallel()
-
 	h := generateCompactHistory(42, 300)
 	cut := len(h.events) / 2
 	complete := func(c *compactProjections) {

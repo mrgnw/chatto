@@ -1,7 +1,7 @@
 # FDR-007: Direct Messages
 
 **Status:** Active
-**Last reviewed:** 2026-10-25
+**Last reviewed:** 2026-11-05
 
 ## Overview
 
@@ -17,10 +17,9 @@ its own DM scope. Chatto does not have a cross-server DM inbox.
 - A DM is started from user context menus inside the chat UI (member list clicks, @mention clicks, message author clicks, and clicks on user names in system events such as joins, leaves, and call starts, and on the avatar of a single-user system event).
 - A user's page at `/chat/<server>/user/<userId>` shows their profile and the viewing user's direct conversation with them. Opening the page finds or creates that conversation. The URL keeps the target user's ID, including after account deletion.
 - Thread and message links use the same user-page prefix. Old DM entry links and one-to-one room links redirect to the user page and preserve their destinations.
-- Human users can start a DM with themselves. New DMs have at most two distinct participants, including the caller. The API rejects new group DMs. Existing group conversations remain accessible through room URLs.
-- A bot cannot call `RoomService.StartDM`. This rule applies to self-DMs, new
-  DMs, group DMs, and DMs that already exist. A human must start a DM that
-  includes a bot. The bot then needs explicit DM-scoped message grants.
+- Human and bot users can start a DM with themselves. New DMs have at most two distinct participants, including the caller. The API rejects new group DMs. Existing group conversations remain accessible through room URLs.
+- Bots use the same DM creation and lookup rules as humans. Creation needs
+  an explicit DM-scoped `message.post` grant within the owner's authority.
 - Starting a DM creates the durable room and participant memberships immediately so the complete composer is available, but the empty conversation stays out of every participant's navigation until its first message is sent.
 - The bundled web client starts DMs through ConnectRPC `RoomService.StartDM`, which delegates to the shared core DM model.
 - Selecting **Send message** or a quick-switcher user result first opens that recipient's DM destination. The destination creates or finds the room, shows a loading state until room data is available, and then opens the conversation. A failed attempt stays at the destination with a retry action. Opening a user menu does not create a room.
@@ -75,15 +74,19 @@ its own DM scope. Chatto does not have a cross-server DM inbox.
   including deleted accounts, and an optional `has_message_history` value.
   Navigation hides an empty DM when that value is explicitly false. An absent
   value is unknown. The sidebar then applies its activity and attention rules.
-  Readable DMs also include `last_message_at` for roots and replies and
-  `last_root_message_at` for roots only. Both exclude historical imports and
-  remain unchanged by edits and retractions. Servers without these fields
-  remain connectable; clients do not interpret absent times as old activity.
+  DM history includes only threads that the viewer can read, through either
+  `message.read` or `message.read-interactions` with a relationship. Readable
+  DMs also include `last_message_at` for roots and replies and
+  `last_root_message_at` for roots only, limited to these threads. Both exclude
+  historical imports and remain unchanged by edits and retractions. Servers
+  without these fields remain connectable; clients do not interpret absent
+  times as old activity.
 - Inside a DM room, the room extras sidebar is available but starts closed and does not show the Members panel. The current Files panel and future non-member panels are shared, while channel-style moderation actions such as banning/removing room members remain unavailable.
-- A user can discover a DM only when they are a participant. The main timeline
-  also needs `message.read`. An interaction thread can instead use
-  `message.read-interactions` when the account authored the root or another
-  account directly mentioned it in that thread.
+- A user can discover a DM only when they are a participant. Message content
+  also needs `message.read`, or `message.read-interactions` for related threads.
+  A relationship exists when the account authored the root, another account
+  directly mentioned it, or it received a DM in that thread. The limited main
+  timeline contains only the roots of related threads.
 - Operators can prevent a human user from creating new DMs, or any user from
   sending messages in existing DMs, by revoking `message.post`. A human user
   can still open an existing DM that they are a participant in.
@@ -108,8 +111,9 @@ its own DM scope. Chatto does not have a cross-server DM inbox.
 ### 2. Membership and message permissions authorize DM reads
 
 **Decision:** Membership authorizes discovery and participant metadata.
-`message.read` authorizes the main timeline and broad message-derived state.
-`message.read-interactions` can authorize one derived interaction thread. A
+`message.read` authorizes all DM messages and broad message-derived state.
+`message.read-interactions` authorizes related threads and their roots in the
+limited main timeline. Receiving a DM creates a relationship without a mention. A
 human needs DM-scoped `message.post` to create a DM. Every participant needs it
 to post a root in an existing DM.
 **Why:** The fixed participant set remains the privacy boundary, while the
@@ -166,15 +170,15 @@ participant can manage the content.
 **Why:** Early creation keeps routing, permissions, attachments, previews, and the ordinary room composer simple while avoiding an unsolicited empty conversation in another participant's UI.
 **Tradeoff:** Empty DM rooms remain in durable history and authorized client state even though they are absent from navigation. This small amount of latent state avoids a separate draft-conversation model and disappears automatically from presentation after replay.
 
-### 8. Only humans can start DMs
+### 8. Humans and bots use the same DM rules
 
-**Decision:** A bot cannot call `RoomService.StartDM`. No permission or owner
-override can change this rule. A human must start a DM that includes a bot.
-**Why:** A bot must not create an unsolicited private conversation. A bot does
-not need the start operation to participate after a human creates the DM.
-**Tradeoff:** A bot cannot use the idempotent start operation to get the room
-for an existing DM. It must learn the room from its normal room state or
-realtime events.
+**Decision:** Humans and bots can start DMs with `message.post`. Bots retain
+explicit grants and the owner authority ceiling. Participants can fetch an
+existing DM without posting permission.
+**Why:** Automated workflows need to contact people directly. Restricting bot
+accounts does not prevent spam from human credentials.
+**Tradeoff:** A DM posting grant also permits initiation. There is no separate
+approval step for bots.
 
 ### 9. Deleted accounts stay DM participants
 
@@ -214,7 +218,8 @@ configurable.
 - `message.read` — read the main DM timeline and all accessible DM message
   state.
 - `message.read-interactions` — read complete DM threads that the account
-  started or where another account directly mentioned it.
+  started, where another account directly mentioned it, or where it received
+  a DM from another account.
 - `message.post-in-thread` — create a thread or post a thread reply.
 - `message.echo` — echo a thread reply to the main conversation timeline. The
   action also needs `message.post`.

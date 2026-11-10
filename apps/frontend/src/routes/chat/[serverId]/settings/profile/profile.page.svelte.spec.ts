@@ -5,6 +5,7 @@ import ProfilePage from './+page.svelte';
 import { q } from '$lib/test-utils';
 import { createTestServerScope, type TestServerScope } from '$lib/test-utils/serverScope.svelte';
 import { userPreferences } from '$lib/state/userPreferences.svelte';
+import { UsernameChangeState } from '@chatto/client/api/actionAvailability';
 
 const avatarDataUrl = 'data:image/gif;base64,R0lGODlhAQABAAAAACwAAAAAAQABAAA=';
 
@@ -168,7 +169,10 @@ describe('Profile settings page', () => {
     const { container } = render(ProfilePage);
     await settle();
     await expect.poll(() => q(container, '[data-testid="settings-bio"]')).not.toBeNull();
-    (q(container, 'button[aria-label="Bold"]') as HTMLButtonElement).click();
+    const bold = q(container, 'button[aria-label="Bold"]') as HTMLButtonElement;
+    // Editor DOM can mount before onReady enables its formatting controls.
+    await expect.element(bold).toBeEnabled();
+    bold.click();
     const input = await pasteBio(container, 'Visual bio');
     expect(input.classList.contains('tiptap')).toBe(true);
     (q(container, 'button[type="submit"]') as HTMLButtonElement).click();
@@ -248,6 +252,11 @@ describe('Profile settings page', () => {
 
     const usernameInput = q(container, '[data-testid="settings-username"]') as HTMLInputElement;
     setInputValue(usernameInput, 'alice2');
+    setInputValue(
+      q(container, 'input[placeholder="Enter your display name"]') as HTMLInputElement,
+      '  Updated Alice  '
+    );
+    await pasteBio(container, 'Updated bio');
     (q(container, 'button[type="submit"]') as HTMLButtonElement).click();
 
     await vi.waitFor(() => {
@@ -265,11 +274,52 @@ describe('Profile settings page', () => {
 
     await vi.waitFor(() => {
       expect(mocks.updateProfile).toHaveBeenCalledWith('user-1', {
-        displayName: undefined,
+        displayName: 'Updated Alice',
         login: 'alice2',
-        bio: undefined
+        bio: 'Updated bio'
       });
     });
+  });
+
+  it('rebuilds confirmation after cancellation and requires confirmation again after failure', async () => {
+    const { container } = render(ProfilePage);
+    await settle();
+    const username = q(container, '[data-testid="settings-username"]') as HTMLInputElement;
+    const displayName = q(
+      container,
+      'input[placeholder="Enter your display name"]'
+    ) as HTMLInputElement;
+    const save = q(container, 'button[type="submit"]') as HTMLButtonElement;
+    setInputValue(username, 'alice2');
+    setInputValue(displayName, 'Canceled name');
+    save.click();
+    await settle();
+    await expect.element(q(container, 'dialog')).toHaveTextContent('@alice2');
+    [...container.querySelectorAll<HTMLButtonElement>('dialog button')]
+      .find((button) => button.textContent?.trim() === 'Cancel')!
+      .click();
+    await expect.element(username).toHaveValue('alice2');
+    expect(mocks.updateProfile).not.toHaveBeenCalled();
+
+    setInputValue(username, 'alice3');
+    setInputValue(displayName, 'Alice');
+    mocks.updateProfile.mockRejectedValueOnce(new Error('Offline'));
+    save.click();
+    await settle();
+    await expect.element(q(container, 'dialog')).toHaveTextContent('@alice3');
+    (q(container, 'dialog button[type="submit"]') as HTMLButtonElement).click();
+    await expect.element(q(container, 'form')).toHaveTextContent('Offline');
+    expect(mocks.updateProfile).toHaveBeenCalledExactlyOnceWith('user-1', { login: 'alice3' });
+    await expect.element(username).toHaveValue('alice3');
+
+    save.click();
+    await settle();
+    await expect.element(q(container, 'dialog')).toHaveTextContent('@alice3');
+    expect(mocks.updateProfile).toHaveBeenCalledOnce();
+    (q(container, 'dialog button[type="submit"]') as HTMLButtonElement).click();
+    await vi.waitFor(() => expect(mocks.updateProfile).toHaveBeenCalledTimes(2));
+    await expect.element(save).toBeDisabled();
+    expect(container.querySelector('dialog[open]')).toBeNull();
   });
 
   it('keeps the username cooldown for a regular user', async () => {
@@ -282,6 +332,48 @@ describe('Profile settings page', () => {
     await expect
       .element(q(container, 'form'))
       .toHaveTextContent('You can change your username again in');
+  });
+
+  it('enables an allowed username when its timestamp passes without refetching', async () => {
+    const load = vi.spyOn(server.currentUser, 'load');
+    server.currentUser.user!.actions = {
+      changeUsername: {
+        state: UsernameChangeState.ALLOWED,
+        availableAt: new Date(Date.now() + 2000).toISOString()
+      }
+    };
+    const { container } = render(ProfilePage);
+    await expect.element(q(container, '[data-testid="settings-username"]')).toBeDisabled();
+    await expect.element(q(container, '[data-testid="settings-username"]')).toBeEnabled();
+    expect(load).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    UsernameChangeState.PROVIDER_MANAGED,
+    UsernameChangeState.UNSPECIFIED,
+    99 as UsernameChangeState
+  ])('does not enable policy state %s after its timestamp passes', async (state) => {
+    server.currentUser.user!.actions = {
+      changeUsername: { state, availableAt: '2020-01-01T00:00:00Z' }
+    };
+    const { container } = render(ProfilePage);
+    await expect.element(q(container, '[data-testid="settings-username"]')).toBeDisabled();
+  });
+
+  it('disables managed usernames even for account managers', async () => {
+    server.currentUser.user!.actions = {
+      changeUsername: { state: UsernameChangeState.PROVIDER_MANAGED }
+    };
+    server.permissions.canAdminManageAccounts = true;
+    const { container } = render(ProfilePage);
+    await settle();
+    await expect.element(q(container, '[data-testid="settings-username"]')).toBeDisabled();
+    await expect
+      .element(q(container, 'form'))
+      .toHaveTextContent(
+        'Your username is managed by your sign-in provider and cannot be edited here.'
+      );
+    expect(mocks.updateProfile).not.toHaveBeenCalled();
   });
 
   it('lets an account manager bypass their own username cooldown', async () => {

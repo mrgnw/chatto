@@ -1,0 +1,198 @@
+package core
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/chattocorp/chatto/cli/internal/evtstream"
+	evtv1 "github.com/chattocorp/chatto/cli/internal/pb/chatto/core/evt/v1"
+	"github.com/chattocorp/chatto/cli/internal/readmodel"
+	"github.com/chattocorp/chatto/pkg/events"
+	"github.com/google/uuid"
+	"github.com/nats-io/nats.go/jetstream"
+	"google.golang.org/protobuf/proto"
+)
+
+// operatorOperation fences one root-equivalent operation across replicas. A
+// receipt commits with its facts; it is not an import session or archive cursor.
+type operatorOperation struct {
+	core                           *ChattoCore
+	subject, fingerprint, resource string
+}
+
+func (c *ChattoCore) operatorOperation(ctx context.Context, key, method string, input any) (*operatorOperation, error) {
+	id, err := uuid.Parse(key)
+	if err != nil || len(key) != 36 || id == uuid.Nil {
+		return nil, invalidArgument("operation_key must be a non-zero UUID")
+	}
+	encoded, err := json.Marshal(input)
+	if err != nil {
+		return nil, err
+	}
+	o := &operatorOperation{core: c, subject: evtstream.Aggregate{Type: "operator_operation", ID: id.String()}.Subject("operator_operation_completed"),
+		fingerprint: c.runtimeTokenHash("operator_operation_v1", method+"\x00"+string(encoded))}
+	return o, o.load(ctx)
+}
+
+func (o *operatorOperation) load(ctx context.Context) error {
+	// Each receipt is created with ExpectSubjectSeq(0), atomically with its
+	// operation's facts. Thus this exact subject has at most one record; do not
+	// create a history consumer just to check whether that record exists.
+	// EVT disables AllowDirect, so this read goes through the stream leader.
+	msg, err := o.core.storage.serverEvtStream.GetLastMsgForSubject(ctx, o.subject)
+	if errors.Is(err, jetstream.ErrMsgNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var event evtv1.Event
+	if err := proto.Unmarshal(msg.Data, &event); err != nil {
+		return fmt.Errorf("decode operator receipt: %w", err)
+	}
+	receipt := event.GetOperatorOperationCompleted()
+	if receipt == nil || receipt.GetFingerprint() != o.fingerprint {
+		return invalidArgument("operation_key already belongs to different arguments")
+	}
+	o.resource = receipt.GetResourceId()
+	if o.resource == "" {
+		return fmt.Errorf("operator receipt has no result")
+	}
+	return nil
+}
+
+func (o *operatorOperation) receipt(id string) evtstream.BatchEntry {
+	e := newEvent(SystemActorID, &evtv1.Event{Event: &evtv1.Event_OperatorOperationCompleted{OperatorOperationCompleted: &evtv1.OperatorOperationCompletedEvent{Fingerprint: o.fingerprint, ResourceId: id}}})
+	return evtstream.BatchEntry{Subject: o.subject, Event: e, Expect: events.ExpectSubjectSeq(0)}
+}
+
+// CreateHistoricalOperatorUser creates one active human account with permanent
+// retry protection. Email ownership remains enforced by ordinary account creation.
+func (c *ChattoCore) CreateHistoricalOperatorUser(ctx context.Context, key, login, display, email string) (*readmodel.User, error) {
+	o, err := c.operatorOperation(ctx, key, "CreateUser", []string{login, display, email})
+	if err != nil {
+		return nil, err
+	}
+	if o.resource != "" {
+		return c.GetUser(ctx, o.resource)
+	}
+	if NormalizeDisplayName(display) == "" {
+		display = strings.TrimSpace(login)
+	}
+	user, err := c.createUserWithOptions(ctx, SystemActorID, login, display, "", userCreationOptions{
+		importEmails: nonemptyOperatorEmail(email), importReceipt: o.receipt, importContext: &evtv1.ImportContext{HiddenTimeline: true, UnknownTime: true},
+	})
+	if err != nil {
+		if loadErr := o.load(ctx); loadErr != nil {
+			return nil, loadErr
+		}
+		if o.resource != "" {
+			return c.GetUser(ctx, o.resource)
+		}
+	}
+	return user, err
+}
+
+// HistoricalUserInput describes an imported account, not a source-platform
+// identity. BotOwnerID selects bot creation and must name an active human.
+type HistoricalUserInput struct {
+	Login, DisplayName, Email, BotOwnerID string
+	Deactivated                           bool
+}
+
+// ImportHistoricalUser creates an account and its initial status in one batch.
+// It never issues credentials or changes the status of an existing account.
+func (c *ChattoCore) ImportHistoricalUser(ctx context.Context, key string, input HistoricalUserInput) (*readmodel.User, error) {
+	if input.BotOwnerID == "" && !input.Deactivated {
+		// Preserve the original active-human receipt fingerprint.
+		return c.CreateHistoricalOperatorUser(ctx, key, input.Login, input.DisplayName, input.Email)
+	}
+	if input.BotOwnerID != "" && input.Email != "" {
+		return nil, invalidArgument("bots cannot have verified emails")
+	}
+	o, err := c.operatorOperation(ctx, key, "ImportUser", input)
+	if err != nil {
+		return nil, err
+	}
+	if o.resource != "" {
+		return c.GetUser(ctx, o.resource)
+	}
+	var authorize func() error
+	if input.BotOwnerID != "" {
+		authorize = func() error {
+			owner, err := c.GetUser(ctx, input.BotOwnerID)
+			if err != nil {
+				return err
+			}
+			if owner.GetIsBot() || owner.GetDeleted() || owner.GetDeactivated() {
+				return invalidArgument("bot owner must be an active human")
+			}
+			return nil
+		}
+	}
+	if authorize != nil {
+		if err := authorize(); err != nil {
+			return nil, err
+		}
+	}
+	display := input.DisplayName
+	if NormalizeDisplayName(display) == "" {
+		display = strings.TrimSpace(input.Login)
+	}
+	user, err := c.createUserWithOptions(ctx, SystemActorID, input.Login, display, "", userCreationOptions{
+		isBot: input.BotOwnerID != "", botOwnerID: input.BotOwnerID, credentialFreeBot: true,
+		initialDeactivated: input.Deactivated, authorize: authorize,
+		importEmails: nonemptyOperatorEmail(input.Email), importReceipt: o.receipt,
+		importContext: &evtv1.ImportContext{HiddenTimeline: true, UnknownTime: true},
+	})
+	if err != nil {
+		if loadErr := o.load(ctx); loadErr != nil {
+			return nil, loadErr
+		}
+		if o.resource != "" {
+			return c.GetUser(ctx, o.resource)
+		}
+	}
+	return user, err
+}
+
+// CreateHistoricalOperatorRoom creates one channel, independently of archives.
+func (c *ChattoCore) CreateHistoricalOperatorRoom(ctx context.Context, key, group, name, description string) (*readmodel.Room, error) {
+	o, err := c.operatorOperation(ctx, key, "CreateRoom", []string{group, name, description})
+	if err != nil {
+		return nil, err
+	}
+	if o.resource != "" {
+		return c.GetRoom(ctx, KindChannel, o.resource)
+	}
+	room, err := c.CreateRoom(ctx, SystemActorID, KindChannel, group, name, description, func(options *createRoomOptions) {
+		options.importReceipt = o.receipt
+		options.importContext = &evtv1.ImportContext{HiddenTimeline: true, UnknownTime: true}
+	})
+	if err != nil {
+		if loadErr := o.load(ctx); loadErr != nil {
+			return nil, loadErr
+		}
+		if o.resource != "" {
+			return c.GetRoom(ctx, KindChannel, o.resource)
+		}
+	}
+	return room, err
+}
+
+func appendOperatorReceipt(entries []evtstream.BatchEntry, claim *messagePostClaim) []evtstream.BatchEntry {
+	if claim != nil && claim.operation != nil {
+		return append(entries, claim.operation.receipt(claim.messageID))
+	}
+	return entries
+}
+
+func nonemptyOperatorEmail(email string) []string {
+	if email == "" {
+		return nil
+	}
+	return []string{email}
+}

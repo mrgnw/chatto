@@ -1,10 +1,16 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { userEvent } from 'vitest/browser';
 import { render } from 'vitest-browser-svelte';
+import { tick } from 'svelte';
 import '../../app.css';
 import { q } from '$lib/test-utils';
 import type { RoomMember } from '$lib/mentions';
 import { PresenceStatus } from '@chatto/api-types/api/v1/presence_pb';
+import { RoomMembersStore } from '@chatto/client/room/members';
+import { createMemberDirectoryAPI } from '@chatto/client/api/memberDirectory';
+import { fakeServer, mockService, receivedRequest } from '@chatto/client/testing/fakeServer';
+import { RoomService } from '@chatto/api-types/api/v1/rooms_connect';
+import { UserService } from '@chatto/api-types/api/v1/user_service_connect';
 
 import type { TimeFormatSettings } from '$lib/utils/formatTime';
 
@@ -16,6 +22,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('$lib/client', async () => ({
   ...(await import('$lib/test-utils/clientMock')).clientMockDefaults,
   serverRegistry: {
+    tryGetStore: () => undefined,
     getServer: (serverId: string) =>
       serverId === 'origin'
         ? { id: 'origin', url: window.location.origin }
@@ -43,6 +50,51 @@ vi.mock('$lib/navigation', () => ({
 }));
 
 import MessageContent, { renderMarkdown } from './MessageContent.svelte';
+import { applyAnimationPreference } from '$lib/dom/motionPreference';
+
+describe('animated message content', () => {
+  it.each(['playing', 'paused'])(
+    'keeps the SVG timeline %s when room metadata refreshes',
+    async (mode) => {
+      applyAnimationPreference('enabled');
+      const body =
+        '```svg rendered\n<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><circle cx="10" cy="50" r="8"><animate attributeName="cx" values="10;190;10" dur="60s" repeatCount="indefinite"/></circle></svg>\n```';
+      const view = render(MessageContent, {
+        body,
+        artifactOwner: {},
+        members: [],
+        roleHandles: []
+      });
+      try {
+        const currentFrame = () => view.container.querySelector('iframe');
+        await expect.poll(() => currentFrame()?.contentDocument?.querySelector('svg')).toBeTruthy();
+        const frame = currentFrame()!;
+        const svg = frame.contentDocument!.querySelector('svg')!;
+        svg.setCurrentTime(12);
+        if (mode === 'paused')
+          await userEvent.click(view.getByRole('button', { name: 'Pause animation' }));
+        const pausedAt = svg.getCurrentTime();
+        const markdownRoot = view.container.querySelector('.markdown-html');
+        const poster = view.container.querySelector('img');
+
+        // New room snapshots can replace these arrays without changing this body.
+        await view.rerender({ members: [member('bob')], roleHandles: ['moderators'] });
+        await new Promise(requestAnimationFrame);
+        await expect.poll(() => currentFrame()?.contentDocument?.querySelector('svg')).toBeTruthy();
+        expect(view.container.querySelector('.markdown-html')).toBe(markdownRoot);
+        expect(view.container.querySelector('img')).toBe(poster);
+        expect(currentFrame()).toBe(frame);
+        expect(frame.contentDocument!.querySelector('svg')).toBe(svg);
+        expect(svg.animationsPaused()).toBe(mode === 'paused');
+        if (mode === 'paused') expect(svg.getCurrentTime()).toBe(pausedAt);
+        else expect(svg.getCurrentTime()).toBeGreaterThanOrEqual(pausedAt);
+      } finally {
+        await view.unmount();
+        applyAnimationPreference('automatic');
+      }
+    }
+  );
+});
 
 const channelRoomId = 'R123456789abcde';
 const dmRoomId = 'abcdef12345678';
@@ -379,15 +431,17 @@ describe('renderMarkdown', () => {
 });
 
 describe('MessageContent component', () => {
-  it('lets a right-click on a rendered link reach the message row', async () => {
+  it.each([false, true])('leaves Shift=%s context menus to the message owner', async (shiftKey) => {
     const rendered = renderMessage('[Example **site**](https://example.com/path)');
     await expect.poll(() => q(rendered.container, 'a strong')).toBeTruthy();
     const nestedText = q(rendered.container, 'a strong')!;
     const contextMenu = vi.fn();
     rendered.container.addEventListener('contextmenu', contextMenu);
 
-    nestedText.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+    const event = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, shiftKey });
+    nestedText.dispatchEvent(event);
 
+    expect(event.defaultPrevented).toBe(false);
     expect(contextMenu).toHaveBeenCalledOnce();
   });
 
@@ -458,7 +512,9 @@ describe('MessageContent component', () => {
     await expect.poll(() => q(container, '.echoed-to-channel-marker')).toBeTruthy();
     const marker = q(container, '.echoed-to-channel-marker')!;
     expect(marker.parentElement?.tagName).toBe('P');
-    expect(marker.parentElement?.previousElementSibling?.tagName).toBe('PRE');
+    const frame = marker.parentElement?.previousElementSibling;
+    expect(frame?.classList.contains('markdown-code-frame')).toBe(true);
+    expect(frame?.querySelector('pre code')?.textContent).toBe('code');
   });
 
   it('renders message timestamp tokens as localized time elements', async () => {
@@ -743,27 +799,32 @@ describe('MessageContent component', () => {
     expect(window.open).not.toHaveBeenCalled();
   });
 
-  it('opens same-origin non-allow-listed links in a new window', async () => {
-    const href = `${window.location.origin}/settings`;
-    const { container } = renderMessage(`[settings](${href})`);
+  it.each(['/settings', 'https://example.com/docs'])(
+    'leaves non-Chatto navigation to the browser for %s',
+    async (url) => {
+      const href = new URL(url, window.location.origin).href;
+      const { container } = renderMessage(`[external](${href})`);
 
-    await expect.poll(() => q(container, 'a')).toBeTruthy();
-    q(container, 'a')!.click();
+      await expect.poll(() => q(container, 'a')).toBeTruthy();
+      const anchor = q(container, 'a') as HTMLAnchorElement;
+      let prevented: boolean | undefined;
+      document.addEventListener(
+        'click',
+        (event) => {
+          prevented = event.defaultPrevented;
+          event.preventDefault();
+        },
+        { once: true }
+      );
+      anchor.click();
 
-    expect(mocks.goto).not.toHaveBeenCalled();
-    expect(window.open).toHaveBeenCalledWith(href, '_blank', 'noopener,noreferrer');
-  });
-
-  it('opens external links in a new window', async () => {
-    const href = 'https://example.com/docs';
-    const { container } = renderMessage(`[external](${href})`);
-
-    await expect.poll(() => q(container, 'a')).toBeTruthy();
-    q(container, 'a')!.click();
-
-    expect(mocks.goto).not.toHaveBeenCalled();
-    expect(window.open).toHaveBeenCalledWith(href, '_blank', 'noopener,noreferrer');
-  });
+      expect(prevented).toBe(false);
+      expect(anchor.href).toBe(href);
+      expect(anchor.target).toBe('_blank');
+      expect(mocks.goto).not.toHaveBeenCalled();
+      expect(window.open).not.toHaveBeenCalled();
+    }
+  );
 
   it('renders fenced code blocks with highlighted markup and hides raw fences', async () => {
     const { container } = renderMessage('```javascript\nconst x = 1;\n```');
@@ -805,16 +866,88 @@ describe('MessageContent component', () => {
   });
 
   describe('mention wiring', () => {
+    it('keeps the mention badge through an unchanged profile refresh', async () => {
+      const rooms = mockService(RoomService);
+      const users = mockService(UserService);
+      rooms.listMembers.mockReturnValue({
+        userIds: ['alice'],
+        page: { hasMore: false, totalCount: 1n }
+      });
+      users.batchGetUsers.mockReturnValue({
+        users: [{ user: { id: 'alice', login: 'alice', displayName: 'Alice Smith' } }]
+      });
+      const api = createMemberDirectoryAPI(
+        fakeServer((router) => {
+          router.service(RoomService, rooms);
+          router.service(UserService, users);
+        })
+      );
+      const mentionStore = new RoomMembersStore('room', api);
+      const { container } = render(MessageContent, { body: 'Hello @alice!', mentionStore });
+      await expect.poll(() => q(container, '.mention')?.textContent).toBe('@Alice Smith');
+      const profiles = await api.batchGetUsers(['alice']);
+      // Hold any redundant read open so a transient fallback cannot pass unnoticed.
+      rooms.listMembers.mockImplementation(() => new Promise(() => {}));
+      mentionStore.updateUsers(profiles);
+      await tick();
+      expect(q(container, '.mention')?.textContent).toBe('@Alice Smith');
+      expect(rooms.listMembers).toHaveBeenCalledTimes(1);
+      mentionStore.dispose();
+    });
+
+    it('loads only visible handles with the directory closed and shares them across content', async () => {
+      const rooms = mockService(RoomService);
+      const users = mockService(UserService);
+      rooms.listMembers.mockReturnValue({
+        userIds: ['alice'],
+        page: { hasMore: false, totalCount: 1n }
+      });
+      users.batchGetUsers.mockReturnValue({
+        users: [{ user: { id: 'alice', login: 'alice', displayName: 'Alice Smith' } }]
+      });
+      const api = createMemberDirectoryAPI(
+        fakeServer((router) => {
+          router.service(RoomService, rooms);
+          router.service(UserService, users);
+        })
+      );
+      const mentionStore = new RoomMembersStore('room', api);
+      const onMentionClick = vi.fn();
+      const first = render(MessageContent, {
+        body: 'Hello @alice!',
+        mentionStore,
+        viewerLogin: 'alice',
+        onMentionClick
+      });
+      const second = render(MessageContent, { body: 'Thread reply to @ALICE', mentionStore });
+      await expect
+        .poll(() => q(first.container, '.mention-self')?.textContent)
+        .toBe('@Alice Smith');
+      await expect.poll(() => q(second.container, '.mention')?.textContent).toBe('@Alice Smith');
+      expect(rooms.listMembers).toHaveBeenCalledTimes(1);
+      expect(receivedRequest(rooms.listMembers)).toMatchObject({ roomId: 'room', search: 'alice' });
+      expect(mentionStore.hasRequestedList).toBe(false);
+      expect(mentionStore.members).toEqual([]);
+      q(first.container, '.mention')!.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+      expect(onMentionClick).toHaveBeenCalledWith('alice', expect.any(DOMRect));
+      await first.rerender({ body: '`@alice` @all', mentionStore, roleHandles: [] });
+      await expect.poll(() => q(first.container, '.mention-broadcast')?.textContent).toBe('@all');
+      expect(rooms.listMembers).toHaveBeenCalledTimes(1);
+      await second.unmount();
+      await expect.poll(() => mentionStore.mentionMembers).toEqual([]);
+      mentionStore.dispose();
+    });
     // resolveRenderedMentions itself is exhaustively tested in
     // $lib/mentions.svelte.test.ts. These tests assert that MessageContent renders
     // mention candidates and resolves them, i.e. that the mention class shows up
     // in the rendered DOM when a matching member is present.
-    it('keeps a member handle in a URL as literal link text', async () => {
-      const url = 'https://social.5f9.de/@alice/117331230238178837';
+    it('keeps a member handle in a web link as literal text', async () => {
+      const url = 'https://social.5f9.de/@alice/123';
       const { container } = renderMessage(`Zum Thema ${url}`, [
         { ...member('alice'), displayName: 'Alice Smith' }
       ]);
-      await expect.poll(() => q(container, 'a')?.textContent).toBe(url);
+      await expect.poll(() => q(container, '.url-link')?.textContent?.trim()).toBe(url);
+      expect(q(container, '.url-link')?.getAttribute('data-content-href')).toBe(url);
       expect(q(container, 'span.mention')).toBeNull();
     });
 

@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/chattocorp/chatto/cli/internal/readmodel"
+
 	"github.com/chattocorp/chatto/cli/internal/authctx"
 	"github.com/chattocorp/chatto/cli/internal/connectapi"
 	"github.com/chattocorp/chatto/cli/internal/core"
@@ -233,6 +235,16 @@ func (s *HTTPServer) serveRealtimeWebSocket(parent context.Context, conn *websoc
 
 	if credentialOK && (credential.Kind == authctx.RuntimeCredentialKindCookieSession || credential.Kind == authctx.RuntimeCredentialKindBearerToken) {
 		credentialCheckDone := make(chan struct{})
+		accountAccessInvalidated, stopAccountAccessWatch, err := s.watchRealtimeAccountAccess(ctx, credential.UserID)
+		if err != nil {
+			if errors.Is(err, core.ErrNotAuthenticated) {
+				terminateRealtimeForCredentialRevocation(cancel, writeFrame, func() { _ = conn.Close() })
+			} else {
+				writeClose(realtimev1.RealtimeCloseCode_REALTIME_CLOSE_CODE_TEMPORARILY_UNAVAILABLE, "authentication service temporarily unavailable", true, time.Second)
+			}
+			return
+		}
+		defer stopAccountAccessWatch()
 		credentialCheckEvery := realtimeCredentialCheckInterval
 		if s.realtimeCredentialCheckEvery > 0 {
 			credentialCheckEvery = s.realtimeCredentialCheckEvery
@@ -243,6 +255,9 @@ func (s *HTTPServer) serveRealtimeWebSocket(parent context.Context, conn *websoc
 			defer ticker.Stop()
 			for {
 				select {
+				case <-accountAccessInvalidated:
+					terminateRealtimeForCredentialRevocation(cancel, writeFrame, func() { _ = conn.Close() })
+					return
 				case <-ticker.C:
 					privilegedUntil, err := s.revalidateRealtimeCredential(ctx)
 					if err == nil {
@@ -353,22 +368,16 @@ func (s *HTTPServer) serveRealtimeWebSocket(parent context.Context, conn *websoc
 		return
 	}
 	resumeCursor := strings.TrimSpace(subscribe.GetResumeCursor())
-	cursorAtBoundary, err := s.core.RealtimeCursorAtCurrentBoundary(ctx, user.Id, resumeCursor)
-	if err != nil {
-		writeClose(realtimev1.RealtimeCloseCode_REALTIME_CLOSE_CODE_TEMPORARILY_UNAVAILABLE, "realtime replay is temporarily unavailable", true, time.Second)
-		return
-	}
-	// A cursorless snapshot or live-only start cannot request history.
-	// Bound it by catch-up concurrency and timeout. Reserve the per-user rate
-	// budget for explicit stale-cursor replay attempts, including cursor reuse.
-	meteredReplay := resumeCursor != "" && !cursorAtBoundary
-	releaseCatchUp, admissionErr := s.realtimeCatchUps.acquire(user.Id, meteredReplay)
-	if admissionErr != nil {
+	rejectCatchUp := func(admissionErr *realtimeCatchUpAdmissionError) {
 		s.metrics.realtimeCatchUpRejected(admissionErr.code)
-		_ = writeFrame(&realtimev1.RealtimeServerFrame{Frame: &realtimev1.RealtimeServerFrame_Close{
-			Close: &realtimev1.RealtimeClose{Code: realtimev1.RealtimeCloseCode_REALTIME_CLOSE_CODE_TEMPORARILY_UNAVAILABLE, Message: "realtime catch-up capacity is temporarily unavailable", Reconnect: true, RetryAfter: durationpb.New(admissionErr.retryAfter)},
-		}})
+		writeClose(realtimev1.RealtimeCloseCode_REALTIME_CLOSE_CODE_TEMPORARILY_UNAVAILABLE, "realtime catch-up capacity is temporarily unavailable", true, admissionErr.retryAfter)
 		_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseTryAgainLater, admissionErr.code), time.Now().Add(time.Second))
+	}
+	// Every catch-up uses the general budget and concurrency limits. The plan
+	// charges the additional replay budget at its exact boundary, before scanning.
+	releaseCatchUp, admissionErr := s.realtimeCatchUps.acquire(user.Id)
+	if admissionErr != nil {
+		rejectCatchUp(admissionErr)
 		return
 	}
 	s.metrics.realtimeCatchUpStarted()
@@ -412,8 +421,17 @@ func (s *HTTPServer) serveRealtimeWebSocket(parent context.Context, conn *websoc
 		_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "subscribe failed"), time.Now().Add(time.Second))
 		return
 	}
-	replayPlan, err := s.core.PlanRealtimeReplay(catchUpCtx, user.Id, subscribe.GetResumeCursor())
+	replayPlan, err := s.core.PlanRealtimeReplay(catchUpCtx, user.Id, resumeCursor, func() error {
+		if admissionErr := s.realtimeCatchUps.consumeReplayToken(user.Id); admissionErr != nil {
+			return admissionErr
+		}
+		return nil
+	})
 	if err != nil {
+		if errors.As(err, &admissionErr) {
+			rejectCatchUp(admissionErr)
+			return
+		}
 		if errors.Is(catchUpCtx.Err(), context.DeadlineExceeded) {
 			failCatchUp("Realtime replay planning timed out", err)
 			return
@@ -422,17 +440,6 @@ func (s *HTTPServer) serveRealtimeWebSocket(parent context.Context, conn *websoc
 		writeClose(code, message, code == realtimev1.RealtimeCloseCode_REALTIME_CLOSE_CODE_TEMPORARILY_UNAVAILABLE, time.Second)
 		_ = conn.WriteControl(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "replay unavailable"), time.Now().Add(time.Second))
 		return
-	}
-	if resumeCursor != "" && !meteredReplay && replayPlan.HadSequenceGap {
-		// EVT advanced after the current-boundary check. Charge the newly-real
-		// replay gap before emitting subscribed, snapshot, or event frames.
-		if chargeErr := s.realtimeCatchUps.consumeReplayToken(user.Id); chargeErr != nil {
-			s.metrics.realtimeCatchUpRejected(chargeErr.code)
-			_ = writeFrame(&realtimev1.RealtimeServerFrame{Frame: &realtimev1.RealtimeServerFrame_Close{
-				Close: &realtimev1.RealtimeClose{Code: realtimev1.RealtimeCloseCode_REALTIME_CLOSE_CODE_TEMPORARILY_UNAVAILABLE, Message: "realtime catch-up capacity is temporarily unavailable", Reconnect: true, RetryAfter: durationpb.New(chargeErr.retryAfter)},
-			}})
-			return
-		}
 	}
 
 	boundaryCursor := replayPlan.BoundaryCursor
@@ -499,9 +506,7 @@ func (s *HTTPServer) serveRealtimeWebSocket(parent context.Context, conn *websoc
 			return
 		case event, ok := <-events:
 			if !ok {
-				_ = writeFrame(&realtimev1.RealtimeServerFrame{Frame: &realtimev1.RealtimeServerFrame_Close{
-					Close: &realtimev1.RealtimeClose{Code: realtimev1.RealtimeCloseCode_REALTIME_CLOSE_CODE_TEMPORARILY_UNAVAILABLE, Message: "event stream closed", Reconnect: true, RetryAfter: durationpb.New(time.Second)},
-				}})
+				closeRealtimeForEventStream(ctx, writeFrame)
 				return
 			}
 			if event.DeliverySeq() > 0 && event.DeliverySeq() <= boundarySequence {
@@ -571,6 +576,19 @@ func realtimeReplayClose(err error) (code realtimev1.RealtimeCloseCode, message 
 
 func shouldCompressRealtimeFrame(compressionEnabled bool, payloadBytes int) bool {
 	return compressionEnabled && payloadBytes >= realtimeCompressionMinBytes
+}
+
+// closeRealtimeForEventStream reports an unexpected stream failure. Credential
+// watchers cancel the context before writing their specific close frame. That
+// cancellation also closes the event stream, and select can choose either ready
+// channel. Leave the close frame to the watcher when cancellation caused it.
+func closeRealtimeForEventStream(ctx context.Context, writeFrame func(*realtimev1.RealtimeServerFrame) error) {
+	if ctx.Err() != nil {
+		return
+	}
+	_ = writeFrame(&realtimev1.RealtimeServerFrame{Frame: &realtimev1.RealtimeServerFrame_Close{
+		Close: &realtimev1.RealtimeClose{Code: realtimev1.RealtimeCloseCode_REALTIME_CLOSE_CODE_TEMPORARILY_UNAVAILABLE, Message: "event stream closed", Reconnect: true, RetryAfter: durationpb.New(time.Second)},
+	}})
 }
 
 func realtimeCredentialDeadline(credential authctx.RuntimeCredential, cookieTTL time.Duration) (time.Time, bool) {
@@ -744,7 +762,7 @@ func (s *HTTPServer) watchRealtimeClient(ctx context.Context, cancel context.Can
 	}
 }
 
-func (s *HTTPServer) realtimeAuthenticatedUser(ctx context.Context, subscribe *realtimev1.RealtimeSubscribe) (context.Context, *evtv1.User, error) {
+func (s *HTTPServer) realtimeAuthenticatedUser(ctx context.Context, subscribe *realtimev1.RealtimeSubscribe) (context.Context, *readmodel.User, error) {
 	if token := strings.TrimSpace(subscribe.GetBearerToken()); token != "" {
 		credential, ok, err := s.bearerPresentedCredential(ctx, token)
 		if err != nil {
@@ -771,6 +789,18 @@ func (s *HTTPServer) realtimeAuthenticatedUser(ctx context.Context, subscribe *r
 // access when a live revocation signal is lost. It returns the credential's
 // current privileged-mode deadline, which another connection of the same
 // session can change.
+// watchRealtimeAccountAccess registers before validating the credential again.
+// A completed deactivate/reactivate cycle before registration must still reject
+// the old credential; a transition after registration closes the watch.
+func (s *HTTPServer) watchRealtimeAccountAccess(ctx context.Context, userID string) (<-chan struct{}, func(), error) {
+	invalidated, stop := s.core.WatchAccountAccessInvalidated(userID)
+	if _, err := s.revalidateRealtimeCredential(ctx); err != nil {
+		stop()
+		return nil, nil, err
+	}
+	return invalidated, stop, nil
+}
+
 func (s *HTTPServer) revalidateRealtimeCredential(ctx context.Context) (time.Time, error) {
 	credential, ok := authctx.CredentialForContext(ctx)
 	if !ok {

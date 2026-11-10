@@ -8,10 +8,30 @@ type RoomModalTarget = {
 
 /** The complete set of shallow-routed global modals and their required payloads. */
 export type ChatModal =
-  | { type: 'logout' }
   | { type: 'aboutChatto' }
-  | { type: 'addServer' }
+  /** Address lookup owned by the Server Directory route. */
+  | { type: 'serverAddress' }
+  /** Cached recommendation provenance; opening this dialog makes no requests. */
+  | {
+      type: 'serverRecommendation';
+      name: string;
+      origin: string;
+      sources: Array<{ name: string; origin: string }>;
+    }
   | { type: 'motd'; motd: string }
+  /** Local diagram snapshot. Keep one source in history; derive download URLs in the viewer. */
+  | ({
+      type: 'renderedImageViewer';
+      alt: string;
+    } & (
+      | { src: string; svgSource?: never }
+      /** Sanitized SVG for the scriptless playback frame, when the image animates. */
+      | { src?: never; svgSource: string }
+    ))
+  /** Rendered by the active invitation-code table that opened it. */
+  | { type: 'createInvitationCode'; serverId: string; creatorId: string }
+  /** Rendered by the active room's notice panel so access loss also removes its draft. */
+  | (RoomModalTarget & { type: 'roomNoticeEditor'; editorId: string })
   | (RoomModalTarget & { type: 'leaveRoom'; roomName: string })
   | { type: 'removeServer'; serverId: string; spaceName: string }
   | (RoomModalTarget & { type: 'deleteMessage'; eventId: string })
@@ -49,6 +69,7 @@ export type EditAttachmentDescriptionModalState = Extract<
   { type: 'editAttachmentDescription' }
 >;
 export type HtmlViewerModalState = Extract<ChatModal, { type: 'htmlViewer' }>;
+export type RenderedImageViewerModalState = Extract<ChatModal, { type: 'renderedImageViewer' }>;
 
 /** One opening of the shared file viewer, including an optional image gallery. */
 export type AttachmentViewerModalState = Extract<ChatModal, { type: 'attachmentViewer' }>;

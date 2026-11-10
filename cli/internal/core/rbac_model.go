@@ -3,7 +3,7 @@ package core
 import (
 	"context"
 
-	evtv1 "github.com/chattocorp/chatto/cli/internal/pb/chatto/core/evt/v1"
+	"github.com/chattocorp/chatto/cli/internal/readmodel"
 	"github.com/chattocorp/chatto/pkg/events"
 )
 
@@ -20,7 +20,7 @@ func (m *RBACModel) waitFor(ctx context.Context, pos events.StreamPosition) erro
 	return waitForPositionAll(ctx, pos, waitForProjection("RBAC", m.rbac.Projector()))
 }
 
-func (m *RBACModel) role(name string) (*evtv1.Role, bool) {
+func (m *RBACModel) role(name string) (*readmodel.Role, bool) {
 	return m.rbac.Projection().GetRole(name)
 }
 
@@ -28,7 +28,7 @@ func (m *RBACModel) roleExists(name string) bool {
 	return m.rbac.Projection().RoleExists(name)
 }
 
-func (m *RBACModel) roles() []*evtv1.Role {
+func (m *RBACModel) roles() []*readmodel.Role {
 	return m.rbac.Projection().ListRoles()
 }
 
@@ -74,4 +74,9 @@ func (m *RBACModel) hasAnyPrivilegedModeAllow(userID string) bool {
 
 func (m *RBACModel) nextAvailablePosition() int32 {
 	return m.rbac.Projection().NextAvailablePosition()
+}
+
+// roleCounts returns administrative totals without reading member profiles.
+func (m *RBACModel) roleCounts(activeHumanIDs []string) map[string]RoleCounts {
+	return m.rbac.Projection().RoleCounts(activeHumanIDs)
 }

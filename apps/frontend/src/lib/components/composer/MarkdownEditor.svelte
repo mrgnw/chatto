@@ -5,7 +5,7 @@ CodeMirror-backed Markdown source editor for the message composer. It exposes
 the same API as the visual editor while keeping the stored Markdown visible.
 -->
 <script lang="ts">
-  import { tick, untrack } from 'svelte';
+  import { getAllContexts, tick, untrack } from 'svelte';
   import {
     defaultKeymap,
     history,
@@ -27,6 +27,7 @@ the same API as the visual editor while keeping the stored Markdown visible.
   import { sourceAutolinks } from './sourceAutolinks';
   import { sourceEmphasisHighlighting, sourceEmphasisSyntax } from './sourceEmphasisHighlighting';
   import { sourceLinkHighlighting, sourceLinkSyntax } from './sourceLinkHighlighting';
+  import { sourceEntityLinkPreview } from './sourceEntityLinkPreview';
   import { m } from '$lib/i18n/messages';
   import { codeFenceHighlighting } from './codeFenceHighlighting';
   import type {
@@ -113,37 +114,6 @@ the same API as the visual editor while keeping the stored Markdown visible.
     // Firefox positions the native caret against the buffer before the placeholder.
     // Keep that buffer on the text baseline when the editor is empty.
     '.cm-line:has(> .cm-placeholder) > .cm-widgetBuffer': { verticalAlign: 'baseline' },
-    '.cm-code-fence': {
-      boxSizing: 'border-box',
-      backgroundColor: 'color-mix(in srgb, var(--color-surface-emphasized) 68%, transparent)',
-      paddingInline: '0.5rem'
-    },
-    '.cm-code-fence-open': {
-      marginTop: '0.25rem',
-      borderStartStartRadius: '0.375rem',
-      borderStartEndRadius: '0.375rem',
-      paddingTop: '0.2rem',
-      color: 'var(--color-muted)'
-    },
-    '.cm-code-fence-body': {
-      fontFamily: 'var(--font-mono)',
-      direction: 'ltr',
-      unicodeBidi: 'isolate',
-      color: 'var(--composer-code-text)'
-    },
-    '.cm-code-fence-body span': {
-      backgroundColor: 'transparent'
-    },
-    '.cm-code-fence-body span:not([class*="hljs-"])': {
-      color: 'inherit'
-    },
-    '.cm-code-fence-close': {
-      marginBottom: '0.25rem',
-      borderEndStartRadius: '0.375rem',
-      borderEndEndRadius: '0.375rem',
-      paddingBottom: '0.2rem',
-      color: 'var(--color-muted)'
-    },
     '::selection': {
       backgroundColor: 'color-mix(in srgb, var(--color-action) 20%, transparent)'
     },
@@ -184,6 +154,7 @@ the same API as the visual editor while keeping the stored Markdown visible.
   }: ComposerEditorProps = $props();
 
   let view: EditorView | null = null;
+  const context = getAllContexts();
 
   function mountEditor(node: HTMLDivElement) {
     const editableCompartment = new Compartment();
@@ -218,6 +189,7 @@ the same API as the visual editor while keeping the stored Markdown visible.
           }),
           syntaxHighlighting(markdownHighlightStyle),
           sourceLinkHighlighting,
+          sourceEntityLinkPreview(context),
           sourceEmphasisHighlighting,
           codeFenceHighlighting,
           markdownTheme,
@@ -394,6 +366,8 @@ the same API as the visual editor while keeping the stored Markdown visible.
   function contentAttributes(label: string, dataTestid?: string) {
     return EditorView.contentAttributes.of({
       role: 'textbox',
+      // Keep long source blocks reachable by keyboard inside CodeMirror's scroller.
+      tabindex: '0',
       'aria-label': label,
       'aria-multiline': 'true',
       spellcheck: 'true',

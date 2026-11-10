@@ -1,12 +1,12 @@
 ---
 title: Identity & Login
-description: Configure accounts, email, login providers, invite links, owner recovery, and connections from other Chatto clients.
+description: Configure accounts, email, login providers, invitation codes, owner recovery, and connections from other Chatto clients.
 ---
 
 import { Aside, Tabs, TabItem } from "@astrojs/starlight/components";
 
 Chatto supports local password accounts, external login providers, email
-verification and password reset, invite links, and owner recovery. This page
+verification and password reset, invitation codes, and owner recovery. This page
 also tells you how other Chatto clients connect to your server.
 
 ## Choose Your Account Model
@@ -17,6 +17,31 @@ also tells you how other Chatto clients connect to your server.
 | Invite-only server | Set [invite-only account creation](#invite-only-account-creation). |
 | Organization SSO | Add [login providers](/guides/integrations/external-login-providers/) and turn off [password login](#sso-only-login). |
 | Mixed community | Keep password accounts and add selected login providers. |
+
+## Deactivate an Account
+
+Upgrade every server replica to a version that supports account deactivation
+before you use this feature. Older replicas do not enforce the access flag.
+
+To stop access and keep the user's data, open **Server configuration → Members**,
+select the member, and open **Account → Deactivate Account**. You need
+`admin.view-users` and `user.manage-accounts`. Confirm the account and effect.
+You cannot deactivate your own account or an owner account.
+
+One-to-one conversations show a notice when the other account is deactivated
+and stop accepting new messages.
+Deactivated accounts do not appear in new-conversation, mention, or invitation
+pickers. Existing messages and profiles remain readable. Reactivation restores
+these controls without a page reload. Administrative details remain private.
+
+Deactivation blocks sign-in and invalidates existing sessions. The profile,
+messages, files, memberships, and roles remain intact. The user's bots also
+lose access. Existing call connections are removed at the next participant
+permission check. The account's login and email addresses remain claimed.
+
+Select **Reactivate Account** to permit access again. The user must sign in
+again; old human sessions stay invalid. Bot credentials work again after
+reactivation. Account deletion remains a separate action that removes data.
 
 ## SSO-Only Login
 
@@ -47,24 +72,10 @@ With `direct_login = false`, the login page shows only the configured
 providers, and the password login endpoint returns `403`. Existing sessions
 stay valid. `direct_registration` controls registration separately.
 
-Users cannot add, change, or reset local passwords while password login is
-disabled. Account settings keeps the password controls visible but disabled,
-with an SSO notice. Stored passwords and operator recovery remain available.
-For sensitive account actions that require fresh authentication, sign in again
-through SSO on the server that owns the account, then complete the action in
-that server's account settings. A stored local password cannot replace this
-SSO authentication.
-
-Users cannot disconnect their last enabled sign-in method. On SSO-only
-servers, a stored password does not count as an alternative. Link another
-provider that the server still supports before disconnecting the current one.
-A link to a removed provider or an old OIDC issuer does not prevent lockout
-and does not count as an alternative.
-
-After an upgrade, an old OIDC link can contain only an identity hash. Sign in
-through that OIDC provider once to let Chatto record its verified issuer.
-Until then, the link does not count as an alternative when disconnecting
-another provider. This update does not require group-role mappings.
+Password changes and resets are unavailable while password login is disabled.
+Stored passwords and local operator recovery remain available. Before you disable
+password login, link the owner account to a working provider. An old or removed
+provider link does not provide an alternative sign-in method.
 
 <Aside type="caution">
   If no provider works, signed-out users cannot sign in. Keep an operator
@@ -148,90 +159,39 @@ provider accepted the email, not that the email arrived.
 
 ## External Providers
 
-Add login providers as repeated `[[auth.providers]]` entries. Chatto supports
-`oidc`, `github`, `gitlab`, `google`, and `discord`:
-
-```toml
-[[auth.providers]]
-id = "company-oidc"
-type = "oidc"
-label = "Company SSO"
-issuer_url = "https://idp.example.com"
-client_id = "..."
-client_secret = "..."
-auto_provision = false
-```
-
-Do not change a provider `id` after users link accounts. A change disconnects
-those links.
-
-Chatto never merges accounts by email address. It links an external identity
-by its provider and subject. With `auto_provision = true`, a new user confirms
-a username before Chatto creates the account. A signed-in user can link a
-provider from account settings. Chatto does not let a user remove the last
-sign-in method of an account without a password.
-
-See [Login Providers](/guides/integrations/external-login-providers/) for
-callback URLs, scopes, and examples.
+Use [Login Providers](/guides/integrations/external-login-providers/) to configure
+provider IDs, callback URLs, claims, and role mappings. Keep provider IDs stable
+after accounts are linked. Chatto does not merge accounts by email address.
 
 ## Verified Email Addresses
 
-Users add email addresses under **Settings → Account**. The user enters the
-address twice. Chatto then sends a six-digit code. Chatto adds the address only
-after the user enters this code. If the user reloads the page in the same tab,
-the pending verification stays available.
-
-An account can have multiple verified addresses. The first address is the
-primary address until the user selects another one. Chatto sends account email
+An account can have multiple verified email addresses. Chatto sends account email
 to the primary address. Sign-in, password reset, and owner matching accept all
-verified addresses.
+verified addresses. Configure transactional email before members need verification
+or password recovery.
 
 ## Invite-Only Account Creation
 
-<Tabs>
-<TabItem label="TOML">
+Open **Server Admin → Registration → Account creation** and select **Invite Code
+Required**. This needs `server.manage`. Registration is open by default; changes
+apply to all replicas without a restart.
 
-```toml
-[auth]
-account_creation_policy = "invite_only"
-```
+The policy applies to email/password registration and provider auto-provisioning,
+including signups already in progress. It does not affect existing accounts or
+accounts that operators create. Chatto consumes a code only after successful
+account creation. Each code permits one account and expires after seven days.
 
-</TabItem>
-<TabItem label="Environment">
+Grant `user.manage-invites` to administrators who manage all codes. Grant
+`user.invite` only to members who can issue and revoke their own codes. The
+**Server Admin → Invites** page provides these actions. Invitation managers need
+privileged mode; members who manage only their own codes do not.
 
-```bash
-CHATTO_AUTH_ACCOUNT_CREATION_POLICY=invite_only
-```
+A code grants admission to anyone who has it. Do not put codes in logs or URLs.
+Keep `core.secret_key` stable on all replicas and after a restore. A change makes
+existing invitation credentials invalid.
 
-</TabItem>
-</Tabs>
-
-Each new self-service account then needs an invite link. This applies to
-email/password registration and to provider auto-provisioning. Existing users
-can still sign in and link providers. Accounts that operators create are not
-affected.
-
-Administrators with the `user.invite` permission create and revoke links under
-**Server Admin → Invite links**. By default, a link has one use and expires
-after seven days. You can set a different use limit, unlimited uses, a
-different expiry, or no expiry. You can copy an active link again later.
-
-People join through the `/invite/{token}` URL of the link. An invite link gives
-admission, not identity: Chatto still verifies the email address, and the
-provider still authenticates the user. An expired, used, revoked, or incorrect
-link shows as unavailable.
-
-<Aside type="caution">
-  An invite link gives access to anyone who has it. Chatto removes the token
-  from its request logs. Configure your reverse proxy and CDN to remove the part
-  after `/invite/` from their access logs too.
-</Aside>
-
-<Aside type="caution">
-  Keep `core.secret_key` the same on all replicas and after a restore. A new
-  key makes all shared invite links invalid. Administrators can then copy new
-  links for the same invites.
-</Aside>
+See the [invitation API reference](/reference/connectrpc-api/admin-invitation-codes/)
+for automated invitation management.
 
 ## Owner Recovery
 

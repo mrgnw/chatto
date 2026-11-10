@@ -342,10 +342,10 @@ it('includes volume controls in the remote user context menu', async () => {
   expect(document.querySelector('[data-testid="copy-user-id"]')).not.toBeNull();
   const input = document.querySelector<HTMLInputElement>('input[type="range"]')!;
   expect(document.querySelectorAll('input[type="range"]')).toHaveLength(1);
-  expect(input.max).toBe('200');
-  input.value = '175';
+  expect(input.max).toBe('100');
+  input.value = '75';
   input.dispatchEvent(new Event('input', { bubbles: true }));
-  expect(change).toHaveBeenCalledWith('bob', 'voiceVolume', 175);
+  expect(change).toHaveBeenCalledWith('bob', 'voiceVolume', 75);
   expect(
     screen.container.querySelector('[title="Alice"] [data-testid="call-participant-menu-button"]')
   ).not.toBeNull();
@@ -479,37 +479,52 @@ it('keeps voice cards equal in height with compact direct mute controls', async 
   expect(muteSelf).toHaveBeenCalledTimes(2);
 });
 
-it('keeps voice columns equal below a single screen share and stacks in a narrow pane', async () => {
-  const screen = renderCallPanelHarness({ layout: 'sidebar', scenario: 'screen-voice' });
-  screen.container.style.width = '500px';
-  await expect.element(screen.getByTestId('call-participant-panel')).toBeInTheDocument();
-  const cards = [
-    ...screen.container.querySelectorAll<HTMLElement>('[data-testid="call-participant-card"]')
-  ];
-  const list = screen.container.querySelector<HTMLElement>(
-    '[data-testid="call-participants-list"]'
-  )!;
-  const share = screen.container.querySelector<HTMLElement>(
-    '[data-testid="call-sidebar-featured"]'
-  )!;
-  await expect
-    .poll(() =>
-      Math.abs(cards[0].getBoundingClientRect().width - cards[1].getBoundingClientRect().width)
-    )
-    .toBeLessThan(1);
-  expect(cards[0].getBoundingClientRect().top).toBe(cards[1].getBoundingClientRect().top);
-  expect(share.getBoundingClientRect().width).toBe(list.getBoundingClientRect().width);
-  expect(cards[0].getBoundingClientRect().width).toBeLessThan(list.getBoundingClientRect().width);
+it.each([2, 3, 4])(
+  'uses two sidebar columns only above three participants (%s people)',
+  async (count) => {
+    const screen = renderCallPanelHarness({ layout: 'sidebar', scenario: 'screen' });
+    screen.container.style.width = '500px';
+    await expect.element(screen.getByTestId('call-participant-panel')).toBeInTheDocument();
+    const call = serverUi(serverRegistry.getStore(serverRegistry.originServer!.id)).voiceCall;
+    flushSync(() => {
+      call.participants = call.participants.slice(0, count);
+    });
+    const cards = [
+      ...screen.container.querySelectorAll<HTMLElement>('[data-testid="call-participant-card"]')
+    ];
+    const list = screen.container.querySelector<HTMLElement>(
+      '[data-testid="call-participants-list"]'
+    )!;
+    const share = screen.container.querySelector<HTMLElement>(
+      '[data-testid="call-sidebar-featured"]'
+    )!;
+    await expect
+      .poll(() =>
+        Math.abs(cards[0].getBoundingClientRect().width - cards[1].getBoundingClientRect().width)
+      )
+      .toBeLessThan(1);
+    expect(share.getBoundingClientRect().width).toBe(list.getBoundingClientRect().width);
+    await expect
+      .poll(() => cards[0].getBoundingClientRect().top === cards[1].getBoundingClientRect().top)
+      .toBe(count > 3);
+    if (count > 3) {
+      expect(cards[0].getBoundingClientRect().width).toBeLessThan(
+        list.getBoundingClientRect().width
+      );
+    } else {
+      expect(cards[0].getBoundingClientRect().width).toBe(list.getBoundingClientRect().width);
+    }
 
-  screen.container.style.width = '280px';
-  await expect
-    .poll(() => cards[0].getBoundingClientRect().width)
-    .toBe(list.getBoundingClientRect().width);
-  expect(cards[1].getBoundingClientRect().top).toBeGreaterThan(
-    cards[0].getBoundingClientRect().top
-  );
-  expect(share.getBoundingClientRect().width).toBe(list.getBoundingClientRect().width);
-});
+    screen.container.style.width = '280px';
+    await expect
+      .poll(() => cards[0].getBoundingClientRect().width)
+      .toBe(list.getBoundingClientRect().width);
+    expect(cards[1].getBoundingClientRect().top).toBeGreaterThan(
+      cards[0].getBoundingClientRect().top
+    );
+    expect(share.getBoundingClientRect().width).toBe(list.getBoundingClientRect().width);
+  }
+);
 
 it('pins a filmstrip tile to the stage until the viewer unpins it or its source ends', async () => {
   const screen = renderCallPanelHarness({ layout: 'stage', scenario: 'screen' });

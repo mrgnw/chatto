@@ -34,9 +34,7 @@ func limitCompoundBatch(t *testing.T, ctx context.Context, core *ChattoCore, slo
 }
 
 func TestCompoundRoomUpdateRejectsEveryPartialBatch(t *testing.T) {
-	t.Parallel()
-
-	for slots := range 4 {
+	for slots := range 5 {
 		t.Run(fmt.Sprint(slots), func(t *testing.T) {
 			core, _ := setupTestCore(t)
 			ctx := testContext(t)
@@ -53,7 +51,8 @@ func TestCompoundRoomUpdateRejectsEveryPartialBatch(t *testing.T) {
 			_, err = core.RoomCommands().updateRoom(ctx, RoomUpdateInput{
 				ActorID: actor.Id, RoomID: room.Id, Name: new("after"), Description: new("after"),
 				Universal: new(true), SlowModeSeconds: proto.Uint32(30),
-				ThreadingMode: evtv1.RoomThreadingMode_ROOM_THREADING_MODE_REQUIRED.Enum(),
+				ThreadingMode:        evtv1.RoomThreadingMode_ROOM_THREADING_MODE_REQUIRED.Enum(),
+				ShowMembershipEvents: new(false),
 			}, func(ctx context.Context) error {
 				limitCompoundBatch(t, ctx, core, slots)
 				return nil
@@ -64,14 +63,12 @@ func TestCompoundRoomUpdateRejectsEveryPartialBatch(t *testing.T) {
 			require.Equal(t, beforeSeq, afterSeq, "a rejected batch must not persist any room field")
 			after, err := core.GetRoom(ctx, KindChannel, room.Id)
 			require.NoError(t, err)
-			require.True(t, proto.Equal(before, after))
+			require.Equal(t, before, after)
 		})
 	}
 }
 
 func TestCompoundRoomUpdateRetriesAcrossReplicas(t *testing.T) {
-	t.Parallel()
-
 	for _, scenario := range []string{"omitted-name", "name-collision", "permission-revoked"} {
 		t.Run(scenario, func(t *testing.T) {
 			ns, _ := testutil.StartNATS(t)
@@ -86,7 +83,8 @@ func TestCompoundRoomUpdateRetriesAcrossReplicas(t *testing.T) {
 			second := startReplica(t, ns, first.config)
 			input := RoomUpdateInput{ActorID: actor.Id, RoomID: room.Id, Description: new("after"),
 				Universal: new(true), SlowModeSeconds: proto.Uint32(30),
-				ThreadingMode: evtv1.RoomThreadingMode_ROOM_THREADING_MODE_REQUIRED.Enum()}
+				ShowMembershipEvents: new(false),
+				ThreadingMode:        evtv1.RoomThreadingMode_ROOM_THREADING_MODE_REQUIRED.Enum()}
 			if scenario == "name-collision" {
 				input.Name = new("claimed")
 			}
@@ -118,8 +116,9 @@ func TestCompoundRoomUpdateRetriesAcrossReplicas(t *testing.T) {
 				require.True(t, updated.Universal)
 				require.EqualValues(t, 30, updated.SlowModeSeconds)
 				require.Equal(t, *input.ThreadingMode, updated.ThreadingMode)
+				require.False(t, updated.ShowMembershipEvents)
 				var previous uint64
-				for _, eventType := range []string{evtstream.EventRoomUpdated, evtstream.EventRoomUniversalChanged, evtstream.EventRoomSlowModeChanged, evtstream.EventRoomThreadingModeChanged} {
+				for _, eventType := range []string{evtstream.EventRoomUpdated, evtstream.EventRoomUniversalChanged, evtstream.EventRoomSlowModeChanged, evtstream.EventRoomThreadingModeChanged, evtstream.EventRoomMembershipEventsVisibilityChanged} {
 					seq, err := first.EventPublisher.LastSubjectSeq(ctx, evtstream.RoomAggregate(room.Id).Subject(eventType))
 					require.NoError(t, err)
 					if previous != 0 {
@@ -143,6 +142,7 @@ func TestCompoundRoomUpdateRetriesAcrossReplicas(t *testing.T) {
 			require.NoError(t, err)
 			require.Equal(t, "before", unchanged.Description)
 			require.False(t, unchanged.Universal)
+			require.True(t, unchanged.ShowMembershipEvents)
 			require.Zero(t, unchanged.SlowModeSeconds)
 			require.Equal(t, evtv1.RoomThreadingMode_ROOM_THREADING_MODE_ENABLED, unchanged.ThreadingMode)
 		})
@@ -150,8 +150,6 @@ func TestCompoundRoomUpdateRetriesAcrossReplicas(t *testing.T) {
 }
 
 func TestCompoundReplyEchoDM(t *testing.T) {
-	t.Parallel()
-
 	core, _ := setupTestCore(t)
 	ctx := testContext(t)
 	author, err := core.CreateUser(ctx, SystemActorID, "compound-dm-author", "Author", "password123")
@@ -180,8 +178,6 @@ func TestCompoundReplyEchoDM(t *testing.T) {
 }
 
 func TestCompoundReplyEchoRejectsEveryPartialBatch(t *testing.T) {
-	t.Parallel()
-
 	for _, existingThread := range []bool{false, true} {
 		batchSize := 4 // body, initial thread, reply, echo
 		if existingThread {
@@ -218,8 +214,6 @@ func TestCompoundReplyEchoRejectsEveryPartialBatch(t *testing.T) {
 }
 
 func TestCompoundReplyEchoRetriesAcrossReplicas(t *testing.T) {
-	t.Parallel()
-
 	for _, revoke := range []bool{false, true} {
 		t.Run(fmt.Sprintf("revoke=%t", revoke), func(t *testing.T) {
 			ns, _ := testutil.StartNATS(t)

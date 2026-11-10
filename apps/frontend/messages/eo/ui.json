@@ -1,5 +1,6 @@
 {
   "ui": {
+    "help": "Helpo",
     "toggle_sidebar": "Baskuligi flankbreton",
     "notifications": "Sciigoj",
     "open_quick_switcher": "Malfermu rapidan ŝaltilon",
@@ -7,7 +8,6 @@
     "realtime_paused": "Realtempaj ĝisdatigoj paŭzis. Rekonektante...",
     "update_available": "Nova versio disponeblas",
     "reload": "Reŝargi",
-    "sign_out": "Eliru",
     "close": "Fermu",
     "auth_status": {
       "origin_title": "Sesio eksvalidiĝis",
@@ -65,12 +65,14 @@
       "loading": "Ŝarĝante..."
     },
     "image_modal": {
+      "open_larger": "Malfermi pli grande",
       "previous": "Antaŭa bildo",
       "next": "Sekva bildo",
       "fallback_alt": "Bildo",
       "zoom_in": "Zomi en",
       "zoom_out": "Zomi el",
       "fit": "Adapti",
+      "pause_animation": "Paŭzigi la animacion",
       "details": "Detaloj",
       "file_type": "Dosiertipo"
     },

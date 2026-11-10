@@ -16,14 +16,16 @@ and exposes a typed API for text manipulation (mentions, emoji, drafts).
 - `onReady` - Called with editor API when editor is initialized
 -->
 <script lang="ts">
+  import { parseArtifactFence, formatArtifactFence } from '$lib/artifactFence';
   import { openRenderedLink } from '$lib/navigation/renderedLink';
   import { isAllowedMarkdownLink } from '$lib/markdownLinks';
-  import { tick, untrack } from 'svelte';
+  import { getAllContexts, tick, untrack } from 'svelte';
   import { Editor } from '@tiptap/core';
   import { Slice } from '@tiptap/pm/model';
   import { Plugin, PluginKey } from '@tiptap/pm/state';
   import { CODE_LANGUAGE_OPTIONS, ensureCodeLanguagesLoaded } from '$lib/codeHighlighting';
   import { m } from '$lib/i18n/messages';
+  import { ScrollFader } from '$lib/ui';
   import type {
     ComposerEditorApi,
     ComposerEditorProps,
@@ -56,6 +58,7 @@ and exposes a typed API for text manipulation (mentions, emoji, drafts).
     blockquote: false,
     codeBlock: false
   };
+  const context = getAllContexts();
 
   let {
     placeholder = m('composer.placeholder'),
@@ -73,10 +76,11 @@ and exposes a typed API for text manipulation (mentions, emoji, drafts).
   }: ComposerEditorProps = $props();
 
   let editorElement = $state<HTMLDivElement>();
+  let editorViewport = $state<HTMLDivElement>();
   let editorFrameElement = $state<HTMLDivElement>();
   let editor = $state<Editor | null>(null);
   let activeCodeBlockLanguage = $state<string | null>(null);
-  let activeCodeBlockSelectorPosition = $state<{ right: number; bottom: number } | null>(null);
+  let activeCodeBlockSelectorPosition = $state<{ right: number; top: number } | null>(null);
   let activeLinkHref = $state<string | null>(null);
   let activeLinkRange = $state<{ from: number; to: number } | null>(null);
   let linkHrefDraft = $state('');
@@ -87,14 +91,16 @@ and exposes a typed API for text manipulation (mentions, emoji, drafts).
   let settingContent = false;
 
   let hasLinkControls = $derived(activeLinkHref !== null);
+  const activeArtifactHint = $derived(parseArtifactFence(activeCodeBlockLanguage));
+  const activeCodeLanguage = $derived(activeArtifactHint?.language ?? activeCodeBlockLanguage);
   let activeCodeBlockLanguageLabel = $derived(
-    CODE_LANGUAGE_OPTIONS.find((language) => language.value === activeCodeBlockLanguage)?.label ??
+    CODE_LANGUAGE_OPTIONS.find((language) => language.value === activeCodeLanguage)?.label ??
       activeCodeBlockLanguage?.toUpperCase() ??
       'TEXT'
   );
   let codeLanguageSelectStyle = $derived(
     activeCodeBlockSelectorPosition
-      ? `right: ${activeCodeBlockSelectorPosition.right}px; bottom: ${activeCodeBlockSelectorPosition.bottom}px;`
+      ? `right: ${activeCodeBlockSelectorPosition.right}px; top: ${activeCodeBlockSelectorPosition.top}px;`
       : ''
   );
 
@@ -120,7 +126,7 @@ and exposes a typed API for text manipulation (mentions, emoji, drafts).
   }
 
   function updateActiveCodeBlockSelectorPosition(e: Editor) {
-    if (!editorFrameElement || !e.isActive('codeBlock')) {
+    if (!editorFrameElement || !editorViewport || !e.isActive('codeBlock')) {
       activeCodeBlockSelectorPosition = null;
       return;
     }
@@ -154,9 +160,14 @@ and exposes a typed API for text manipulation (mentions, emoji, drafts).
 
     const frameRect = editorFrameElement.getBoundingClientRect();
     const preRect = preElement.getBoundingClientRect();
+    const viewport = editorViewport.getBoundingClientRect();
+    if (preRect.bottom < viewport.top + 24 || preRect.top >= viewport.bottom) {
+      activeCodeBlockSelectorPosition = null;
+      return;
+    }
     activeCodeBlockSelectorPosition = {
-      right: frameRect.right - preRect.right,
-      bottom: frameRect.bottom - preRect.bottom
+      right: frameRect.right - preRect.right + 5,
+      top: Math.max(preRect.top + 5, viewport.top) - frameRect.top
     };
   }
 
@@ -214,11 +225,12 @@ and exposes a typed API for text manipulation (mentions, emoji, drafts).
 
   function setCodeBlockLanguage(language: string) {
     if (!editor) return;
+    const hint = formatArtifactFence(language, activeArtifactHint?.presentation === 'visual');
 
     editor
       .chain()
       .focus()
-      .updateAttributes('codeBlock', { language: language || null })
+      .updateAttributes('codeBlock', { language: hint || null })
       .run();
     updateActiveControls(editor);
     ensureEditorCodeLanguages(editor);
@@ -297,7 +309,7 @@ and exposes a typed API for text manipulation (mentions, emoji, drafts).
       const tr = editor.state.tr.addMark(
         activeLinkRange.from,
         activeLinkRange.to,
-        linkType.create({ href })
+        linkType.create({ href, explicitLabel: true })
       );
       editor.view.dispatch(tr);
       editor.commands.focus();
@@ -487,7 +499,7 @@ and exposes a typed API for text manipulation (mentions, emoji, drafts).
       () =>
         new Editor({
           element: editorElement,
-          extensions: createComposerExtensions(placeholder),
+          extensions: createComposerExtensions(placeholder, context),
           content: '',
           contentType: 'markdown',
           editable,
@@ -660,19 +672,32 @@ and exposes a typed API for text manipulation (mentions, emoji, drafts).
     </div>
   {/if}
 
-  <div
-    bind:this={editorElement}
+  <ScrollFader
+    top
+    bottom
+    mask
+    maskSize="1rem"
+    keyboardFocusable={false}
+    bind:scrollEl={editorViewport}
+    scrollClass="composer-scroll-viewport max-h-50 min-h-8 py-1"
     onscroll={() => editor && updateActiveControls(editor)}
-    class={[
-      'composer-code-palette tiptap-editor max-h-50 min-h-8 min-w-0 flex-1 overflow-x-hidden overflow-y-auto bg-transparent py-1 text-text select-text',
-      !editable && 'cursor-not-allowed'
-    ]}
-  ></div>
+  >
+    <div
+      bind:this={editorElement}
+      class={[
+        'composer-code-palette tiptap-editor min-w-0 bg-transparent text-text select-text',
+        !editable && 'cursor-not-allowed'
+      ]}
+    ></div>
+  </ScrollFader>
 
   {#if activeCodeBlockLanguage !== null && activeCodeBlockSelectorPosition}
-    <div class="absolute z-10" style={codeLanguageSelectStyle}>
+    <div
+      class="absolute z-10 code-frame-header rounded-tr-md bg-surface"
+      style={codeLanguageSelectStyle}
+    >
       <div
-        class="group relative inline-flex h-6 items-center gap-1 rounded-tl-md rounded-br-md bg-surface-emphasized pr-1.5 pl-2 font-mono text-xs tracking-wide text-muted uppercase focus-within:bg-surface-strong focus-within:text-text focus-within:ring-1 focus-within:ring-action hover:bg-surface-strong hover:text-text"
+        class="group relative inline-flex h-5 items-center gap-1 font-mono text-xs tracking-wide text-muted uppercase focus-within:text-text focus-within:outline-2 focus-within:outline-action hover:text-text"
       >
         <span>{activeCodeBlockLanguageLabel}</span>
         <span aria-hidden="true" class="iconify icon-[uil--angle-down] size-3"></span>
@@ -680,7 +705,7 @@ and exposes a typed API for text manipulation (mentions, emoji, drafts).
           name="composer-code-language"
           aria-label={m('composer.code_language')}
           title={m('composer.code_language')}
-          value={activeCodeBlockLanguage}
+          value={activeCodeLanguage}
           disabled={!editable || readOnly}
           onchange={(event) => setCodeBlockLanguage(event.currentTarget.value)}
           class="absolute inset-0 h-full w-full cursor-pointer opacity-0 disabled:cursor-not-allowed"
@@ -829,22 +854,6 @@ and exposes a typed API for text manipulation (mentions, emoji, drafts).
     margin-top: 0.45em;
   }
 
-  :global(.tiptap-editor .ProseMirror pre) {
-    overflow: hidden;
-    position: relative;
-    width: 100%;
-    border-radius: 0.375rem;
-    border: 1px solid var(--color-surface-emphasized);
-    background: transparent;
-    padding: 0.5rem 0.75rem;
-    font-family: var(--font-mono);
-    font-size: 0.875rem;
-    line-height: 1.5;
-    box-shadow: 0 1px 2px rgb(0 0 0 / 0.08);
-    direction: ltr;
-    unicode-bidi: isolate;
-  }
-
   :global(.tiptap-editor .ProseMirror p),
   :global(.tiptap-editor .ProseMirror li),
   :global(.tiptap-editor .ProseMirror blockquote),
@@ -867,34 +876,6 @@ and exposes a typed API for text manipulation (mentions, emoji, drafts).
 
   :global(.tiptap-editor .ProseMirror > pre:last-child) {
     margin-bottom: 0;
-  }
-
-  :global(.tiptap-editor .ProseMirror pre[data-language]::after) {
-    content: attr(data-language);
-    position: absolute;
-    right: 0;
-    bottom: 0;
-    border-top-left-radius: 0.375rem;
-    background: var(--color-surface-emphasized);
-    padding: 0.125rem 0.5rem;
-    font-family: var(--font-mono);
-    font-size: 0.75rem;
-    line-height: 1rem;
-    letter-spacing: 0.025em;
-    color: var(--color-muted);
-    text-transform: uppercase;
-    pointer-events: none;
-  }
-
-  :global(.tiptap-editor .ProseMirror pre code) {
-    display: block;
-    overflow-x: auto;
-    background: transparent;
-    padding: 0 3.5rem 0 0;
-    font-size: inherit;
-    line-height: inherit;
-    color: var(--composer-code-text);
-    white-space: pre;
   }
 
   :global(.tiptap-editor .ProseMirror .hljs-comment),

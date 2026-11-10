@@ -6,13 +6,13 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/chattocorp/chatto/cli/internal/readmodel"
+
 	evtv1 "github.com/chattocorp/chatto/cli/internal/pb/chatto/core/evt/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestAuthorizedRoomAttachmentReadsRequireMessageRead(t *testing.T) {
-	t.Parallel()
-
 	chatto, _ := setupTestCore(t)
 	ctx := testContext(t)
 	room, user := setupRoomAttachmentTest(t, chatto, ctx)
@@ -50,8 +50,6 @@ func TestAuthorizedRoomAttachmentReadsRequireMessageRead(t *testing.T) {
 }
 
 func TestAuthorizedDMAttachmentReadsIgnoreMessageRead(t *testing.T) {
-	t.Parallel()
-
 	chatto, _ := setupTestCore(t)
 	ctx := testContext(t)
 	reader, err := chatto.CreateUser(ctx, SystemActorID, "dm-attachment-reader", "DM Attachment Reader", "password123")
@@ -97,8 +95,6 @@ func TestAuthorizedDMAttachmentReadsIgnoreMessageRead(t *testing.T) {
 }
 
 func TestAuthorizedRoomAttachmentReadsUseThreadInteractions(t *testing.T) {
-	t.Parallel()
-
 	chatto, _ := setupTestCore(t)
 	ctx := testContext(t)
 	room, author := setupRoomAttachmentTest(t, chatto, ctx)
@@ -161,8 +157,6 @@ func TestAuthorizedRoomAttachmentReadsUseThreadInteractions(t *testing.T) {
 }
 
 func TestChattoCore_GetRoomAttachmentsIncludesRootAndThreadFiles(t *testing.T) {
-	t.Parallel()
-
 	core, _ := setupTestCore(t)
 	ctx := testContext(t)
 	room, user := setupRoomAttachmentTest(t, core, ctx)
@@ -207,8 +201,6 @@ func TestChattoCore_GetRoomAttachmentsIncludesRootAndThreadFiles(t *testing.T) {
 }
 
 func TestChattoCore_GetRoomAttachmentsPagination(t *testing.T) {
-	t.Parallel()
-
 	core, _ := setupTestCore(t)
 	ctx := testContext(t)
 	room, user := setupRoomAttachmentTest(t, core, ctx)
@@ -260,8 +252,6 @@ func TestChattoCore_GetRoomAttachmentsPagination(t *testing.T) {
 }
 
 func TestChattoCore_GetRoomAttachmentsExcludesRemovedAndRetractedFiles(t *testing.T) {
-	t.Parallel()
-
 	core, _ := setupTestCore(t)
 	ctx := testContext(t)
 	room, user := setupRoomAttachmentTest(t, core, ctx)
@@ -296,8 +286,6 @@ func TestChattoCore_GetRoomAttachmentsExcludesRemovedAndRetractedFiles(t *testin
 }
 
 func TestChattoCore_GetRoomAttachmentsDoesNotDecryptNonFileMessages(t *testing.T) {
-	t.Parallel()
-
 	core, _ := setupTestCore(t)
 	ctx := testContext(t)
 	room, user := setupRoomAttachmentTest(t, core, ctx)
@@ -353,7 +341,7 @@ func TestChattoCore_GetRoomAttachmentsDoesNotDecryptNonFileMessages(t *testing.T
 	}
 }
 
-func setupRoomAttachmentTest(t *testing.T, core *ChattoCore, ctx context.Context) (*evtv1.Room, *evtv1.User) {
+func setupRoomAttachmentTest(t *testing.T, core *ChattoCore, ctx context.Context) (*readmodel.Room, *readmodel.User) {
 	t.Helper()
 	room, err := core.CreateRoom(ctx, "test-user", KindChannel, "", "General", "General discussion")
 	if err != nil {

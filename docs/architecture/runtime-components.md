@@ -1,10 +1,16 @@
 # Runtime Component Inventory
 
-The core [archive importer](../../cli/internal/core/interchange_import.go) owns
-portable archive validation, name mapping, native event construction, and
-durable progress. It runs on operator requests, uses existing user, room,
-encryption, and attachment services, and reads its EVT receipts on resume.
-It adds no background worker or runtime unit.
+Core [historical operations](../../cli/internal/core/operator_history.go) apply
+individual typed room and message transitions through existing projections and
+encrypted message storage. [Operation receipts](../../cli/internal/core/operator_operations.go)
+provide permanent exact retry protection with atomic EVT batches. The server
+has no archive parser or import session. These operations add no background
+worker or runtime unit.
+
+Historical account creation uses the normal user creation batch. It can omit
+the initial bot API key and include `UserAccountDeactivationChanged` before the
+receipt. Bot ownership is checked under the account creation OCC boundary.
+Bot authentication rejects a deactivated bot as well as a deactivated owner.
 
 This file lists the server-side components of the Chatto process: the core
 facade, runtime units, models, publishers, and workers. It does not list
@@ -49,6 +55,12 @@ listener address, and total startup duration. Optional runtime units and
 automatic TLS certificate issuance do not gate this message. If any listener
 cannot bind, startup closes the listeners already opened and does not log
 readiness. Shutdown and serve failures close all HTTP servers.
+
+The HTTP server serves embedded Brotli frontend assets directly when accepted.
+For gzip clients, [`serveFrontendGzip`](../../cli/internal/http_server/frontend_compression.go)
+converts the requested asset as it writes the response. Conversion state lasts
+for that request; there is no startup conversion or retained gzip cache. Raw
+development assets need no conversion.
 
 The HTTP server owns a process-local
 [`imageTransforms`](../../cli/internal/http_server/image_transforms.go)
@@ -126,8 +138,9 @@ operations do not duplicate these outcomes.
   mutations.
 - **`video.Service`** ([`service.go`](../../cli/internal/video/service.go),
   [`processor.go`](../../cli/internal/video/processor.go)): Synchronous
-  video/animated-GIF processing attempts: web-compatible stereo audio
-  normalization, HLS segment packaging and upload, animated-GIF MP4 upload, and
+  video/animated-GIF processing attempts: source-rendition inspection and
+  reuse preflight, fallback encoding with web-compatible stereo audio
+  normalization, aligned HLS segment packaging and upload, animated-GIF MP4 upload, and
   terminal asset processing events; queue and concurrency remain owned by
   `video.Unit`.
 
@@ -200,7 +213,10 @@ stable machine-readable keys such as `config_model`, `message_model`, and
   [`server_config_model.go`](../../cli/internal/core/server_config_model.go),
   [`neighbors.go`](../../cli/internal/core/neighbors.go)): Sole core boundary
   for semantic server/user config and Neighbor reads and event writes, including
-  `ConfigProjection` readiness.
+  `ConfigProjection` readiness. Server registration admission is a typed setting
+  in this aggregate. Self-service account creation reads the current admission
+  under stream-wide EVT OCC and commits any required invitation redemption in
+  the account batch. A conflict rebuilds the batch with the current policy.
 - **`NotificationPolicyModel` / `NotificationOccurrenceModel` /
   `NotificationProjection` / `NotificationMaterializer` /
   `NotificationDecisionProjection` / `NotificationAlertDelivery`**
@@ -300,8 +316,9 @@ stable machine-readable keys such as `config_model`, `message_model`, and
   authorization cache.
 - **`RoomDirectoryReadModel`**
   ([`room_directory_read_model.go`](../../cli/internal/core/room_directory_read_model.go)):
-  Operation-level room directory and sidebar reads, viewer capability and Slow
-  Mode deadline hydration. It receives `RoomModel`, message policy, permission
+  Operation-level room directory and sidebar reads, DM posting activity limited
+  to readable threads, viewer capability and Slow Mode deadline hydration.
+  It receives `RoomModel`, message policy, permission
   resolution, membership, authorization, and unread dependencies. Group joins
   belong to `RoomCommandModel`.
 - **`RoomTimelineReadModel`**
@@ -350,10 +367,14 @@ stable machine-readable keys such as `config_model`, `message_model`, and
 - **`InvitationModel`**
   ([`invitations.go`](../../cli/internal/core/invitations.go),
   [`invitation_projection.go`](../../cli/internal/core/invitation_projection.go)):
-  Sole core owner of invite-link creation, listing, revocation, validation,
+  Sole core owner of invitation-code creation, listing, revocation, validation,
   compact purpose-separated token derivation, and projection readiness;
   redemption commits atomically with the admitted account against a whole-EVT
   OCC guard.
+  Member issuance checks `user.invite`; administrative reads and mutations
+  check `user.manage-invites`. Startup runs
+  [`splitInvitationPermissions`](../../cli/internal/core/invitation_permissions_upgrade.go)
+  after RBAC seeding to preserve old invitation decisions once.
 - **`OAuthClientModel`**
   ([`oauth_clients.go`](../../cli/internal/core/oauth_clients.go),
   [`oauth_client_projection.go`](../../cli/internal/core/oauth_client_projection.go)):
@@ -401,7 +422,10 @@ stable machine-readable keys such as `config_model`, `message_model`, and
 - **`AssetUploadModel`**
   ([`asset_uploads.go`](../../cli/internal/core/asset_uploads.go)): Eagerly
   wired chunked attachment upload sessions, temporary object assembly,
-  pending-asset expiry, and process-local periodic cleanup.
+  pending-asset expiry, and process-local periodic cleanup. GIF uploads use
+  header-only video admission when video processing is enabled; the shared
+  [image inspector](../../cli/internal/assets/images.go) keeps ordinary
+  image-decoder limits separate from this admission path.
 
 ## Realtime
 

@@ -5,7 +5,7 @@ live room delivery and reconnect replay. Their durable historical markers also
 make the public event mapper reject them. Clients obtain imported state through
 resource reads. The older per-record tombstone API uses ordinary retractions,
 which remain eligible for live delivery and reconnect replay. Generic archive
-imports mark all native facts with `ImportContext`; live and reconnect delivery
+imports mark historical timeline facts with `ImportContext`; live and reconnect delivery
 and the public mapper exclude these facts, including retractions and membership
 changes. Hidden reconciliation facts also stay out of the visible room timeline.
 
@@ -65,7 +65,17 @@ after it applies all earlier frames and this marker. The other server frames
 are `event`, `heartbeat`, and `close`. All terminal protocol results use
 `close`. WebSocket control frames provide ping and pong behavior.
 
+Credential watchers cancel authorized work before they write the credential
+close frame. If this cancellation closes the event stream, the handler leaves
+the close frame to the watcher. An unexpected stream closure while the context
+is active sends a temporary failure with reconnect enabled.
+
 ## Public events
+
+`room_notice_changed` identifies a channel whose current notice changed. It is
+delivered to current members after Room Directory projection readiness. The
+public mapper omits notice text and storage state; recipients read the canonical
+notice through `RoomService.GetNotice` with the event's minimum cursor.
 
 `chatto.core.evt.v1.Event` contains durable EVT facts.
 `chatto.core.pubsub.v1.PubSubEvent` contains a restricted set of NATS Core
@@ -242,6 +252,10 @@ deadline. Message viewer state and thread timeline responses carry the current
 viewer's deadline in the canonical thread, including before its first reply.
 Room Slow Mode changes invalidate open thread deadlines as well as room state.
 
+`RoomMembershipEventsVisibilityChangedEvent` follows the room-directory readiness
+and authorization path. Live delivery and catch-up map it to the dedicated public
+payload. It changes no membership-event delivery rules.
+
 The bundled frontend gives each cursor-bounded ConnectRPC call a 10-second
 deadline. A timeout fails reconciliation and closes the socket without cursor
 advance. A new resource reset also starts a new local projection generation.
@@ -292,9 +306,13 @@ use `cursor`; only the subscribe request uses `resume_cursor`.
 
 Incremental replay and fallback share one process-local admission guard. Each
 replica admits at most eight catch-ups at once and one at a time for each user.
-Stale-cursor replay has a per-user burst of three and restores one token every
-20 seconds. Cursorless and current-boundary catch-ups use the general burst of
-20 and restore one token each second. Metrics expose active, started,
+Every catch-up uses the general per-user burst of 20 and restores one token
+each second. Invalid cursors and replay gaps above 32 EVT sequences also consume
+the stricter replay budget, with a burst of three and one token restored every
+20 seconds. The plan checks the cursor against its captured boundary and charges
+that budget before it scans history or returns a fallback. Cursorless starts and
+validated small gaps need no extra replay token. Small gaps include the audit
+facts written by rapid privileged-mode changes. Metrics expose active, started,
 timed-out, and rejected catch-ups.
 
 ## Authorization and projection readiness
@@ -617,8 +635,7 @@ origin rejects its viewer and no loaded data remains, the chat root starts
 origin sign-in and keeps the current page as the return path.
 
 `CurrentUserState` owns the complete account and one pending account request for
-each server. Route loading and recovery use that owner. Cookie migration and
-transient retries are request policy, with no separate account cache. The
+each server. Route loading and recovery use that owner. Transient retries are request policy, with no separate account cache. The
 registry checks identity changes before it publishes the response. Account
 reset, newer live viewer data, and store disposal reject older responses.
 HTTP commands proceed independently of realtime catch-up. The composer
@@ -698,8 +715,19 @@ The frontend keeps its resource view during access-token rotation, cookie-sessio
 renewal, server switches, network reconnects, and tab wake. It replaces the
 socket and sends the same cursor. Human bearer credentials close at
 access-token expiry. Cookie connections close at the renewal boundary. The
-server revalidates the accepted credential before subscription and once per
-minute.
+server revalidates human credentials before subscription and once per minute.
+Each authenticated connection also watches account access through the durable
+user-auth projection. A deactivation transition closes human connections and
+connections of their owned bots with `AUTHENTICATION_REQUIRED`, without a
+reconnect instruction. Registration and the active-state check share the
+projection lock. This path does not depend on a transient session signal.
+Human credentials are validated again after watch registration, so a completed
+deactivation and reactivation before registration cannot revive an old session.
+
+Other viewers receive `UserAccountDeactivationChangedEvent` through the same
+durable live and replay path. Its payload contains the user ID and access flag;
+the public envelope omits the administrator ID. Profile reads and snapshots
+include `User.deactivated`, so reconnect also restores the current status.
 
 The browser resets its liveness timer on every server frame. A heartbeat can
 carry a fresh cursor for the last durable sequence that this socket has

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { untrack } from 'svelte';
+  import { signal } from '@chatto/client/reactivity';
   import { setTimelineViewport } from '$lib/state/room/timelineViewport';
   import type { MessagesStore } from '@chatto/client/room/messages/MessagesStore';
   import { onMount } from 'svelte';
@@ -24,9 +25,12 @@
     roomId = 'room-1',
     permalinkThreadRootEventId = null,
     eventKind = 'message',
+    eventKinds = {},
+    eventDates = {},
     scrollToEventId,
     onComplete,
     isLoading = false,
+    isLoadingMore = false,
     loadError = null,
     isJumpedMode = false,
     onJumpToPresent,
@@ -40,15 +44,33 @@
     onStoreRead,
     onReadPosition,
     onReachedBottom,
-    onClearAnchor
+    onClearAnchor,
+    onLoadMore
   }: {
     eventIds: string[];
     roomId?: string;
     permalinkThreadRootEventId?: string | null;
-    eventKind?: 'message' | 'join';
+    eventKind?: 'message' | 'join' | 'leave';
+    /** Override individual rows for mixed activity and message windows. */
+    eventKinds?: Record<
+      string,
+      | 'message'
+      | 'join'
+      | 'leave'
+      | 'deleted'
+      | 'update'
+      | 'create'
+      | 'room-delete'
+      | 'deleted-join'
+      | 'missing-join'
+      | 'missing-leave'
+    >;
+    /** Override timestamps for calendar-day boundary tests. */
+    eventDates?: Record<string, string>;
     scrollToEventId: string | null;
     onComplete?: () => void;
     isLoading?: boolean;
+    isLoadingMore?: boolean;
     loadError?: unknown;
     isJumpedMode?: boolean;
     onJumpToPresent?: () => Promise<boolean>;
@@ -64,6 +86,8 @@
     onReachedBottom?: () => void;
     /** Called when the timeline clears the store's anchor. */
     onClearAnchor?: () => void;
+    /** Supplies an older page for pagination tests. */
+    onLoadMore?: () => Promise<void>;
   } = $props();
 
   const composerContext = createComposerContext();
@@ -80,24 +104,44 @@
 
   const events = $derived(
     eventIds.map((id, index): TimelineEventView => {
+      const kind = eventKinds[id] ?? eventKind;
       const base = {
         id,
-        createdAt: `2026-06-17T10:47:${String(index).padStart(2, '0')}Z`,
+        createdAt: eventDates[id] ?? `2026-06-17T10:47:${String(index).padStart(2, '0')}Z`,
         actorId: `user-${id}`,
         actor: {
           id: `user-${id}`,
           login: id,
           displayName: `User ${id}`,
-          deleted: false,
+          deleted: kind === 'deleted-join',
           avatarUrl: null,
           presenceStatus: PresenceStatus.OFFLINE
         }
       };
-      if (eventKind === 'join') {
+      if (kind === 'update' || kind === 'create' || kind === 'room-delete') {
+        const eventKind =
+          kind === 'update'
+            ? TimelineEventKind.RoomUpdated
+            : kind === 'create'
+              ? TimelineEventKind.RoomCreated
+              : TimelineEventKind.RoomDeleted;
+        return { ...base, event: { kind: eventKind, roomId } };
+      }
+      if (
+        kind === 'join' ||
+        kind === 'leave' ||
+        kind === 'deleted-join' ||
+        kind === 'missing-join' ||
+        kind === 'missing-leave'
+      ) {
         return {
           ...base,
+          actor: kind === 'missing-join' || kind === 'missing-leave' ? null : base.actor,
           event: {
-            kind: TimelineEventKind.UserJoinedRoom,
+            kind:
+              kind === 'leave' || kind === 'missing-leave'
+                ? TimelineEventKind.UserLeftRoom
+                : TimelineEventKind.UserJoinedRoom,
             roomId
           }
         } as unknown as TimelineEventView;
@@ -107,7 +151,8 @@
         event: {
           kind: TimelineEventKind.MessagePosted,
           roomId,
-          body: id,
+          body: kind === 'deleted' ? null : id,
+          deletedAt: kind === 'deleted' ? base.createdAt : null,
           attachments: [],
           linkPreview: null,
           reactions: [],
@@ -127,18 +172,30 @@
   );
 
   // Match Room's derived store selection so delayed work sees real owner disposal.
+  const timelineRows = signal<TimelineEventView[]>([]);
+  $effect.pre(() => {
+    timelineRows.set(events);
+  });
   const messageStore = $derived({
+    get events() {
+      return timelineRows.get();
+    },
+    isDisposed: false,
     get isInitialLoading() {
       return isLoading;
     },
     get loadError() {
       return loadError;
     },
-    isLoadingMore: false,
+    get isLoadingMore() {
+      return isLoadingMore;
+    },
     get hasReachedStart() {
       return hasReachedStart;
     },
-    loadMore: async () => {},
+    loadMore: async () => {
+      await onLoadMore?.();
+    },
     canLoadNewer: false,
     loadNewer: async () => ({ status: 'declined' }),
     jumpToLatest: async () => (await onJumpToPresent?.()) ?? false,

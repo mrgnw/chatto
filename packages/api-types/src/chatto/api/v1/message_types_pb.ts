@@ -379,13 +379,15 @@ export class MessageAttachment extends Message$1<MessageAttachment> {
 
   /**
    * Signed URL for a thumbnail image, when available.
+   * GIFs routed to video processing use the generated video thumbnail. The URL
+   * is absent when that thumbnail is unavailable.
    *
    * @generated from field: chatto.api.v1.MessageAssetUrl thumbnail_asset_url = 7;
    */
   thumbnailAssetUrl?: MessageAssetUrl;
 
   /**
-   * Video-specific processing metadata, when this attachment is a video.
+   * Video processing metadata for videos and animated GIFs.
    *
    * @generated from field: chatto.api.v1.MessageVideoProcessing video_processing = 8;
    */
@@ -590,16 +592,15 @@ export class ThreadSummary extends Message$1<ThreadSummary> {
   lastReplyAt?: Timestamp;
 
   /**
-   * Preview of up to five user IDs that have participated in this message's
-   * thread.
+   * Preview of up to twelve distinct current reply authors, excluding erased users.
+   * The root author appears first only if they have a current reply.
    *
    * @generated from field: repeated string participant_preview_user_ids = 4;
    */
   participantPreviewUserIds: string[] = [];
 
   /**
-   * Total number of distinct users that have participated in this message's
-   * thread.
+   * Total number of distinct current reply authors, excluding erased users.
    *
    * @generated from field: int32 participant_count = 5;
    */

@@ -1,7 +1,7 @@
 # FDR-012: Workflow state and restart recovery
 
 **Status:** Experimental
-**Last reviewed:** 2026-10-18
+**Last reviewed:** 2026-10-27
 
 ## Overview
 
@@ -9,6 +9,21 @@ Server workflows keep application-owned state across restarts through periodic
 snapshots. Recovery re-enters the root task; it does not resume JavaScript execution.
 
 ## Behavior
+
+- A root return ends the current execution. A router can reactivate a retained
+  run with `ctx.start(task, { input, runId })`. The source kind, route name, and
+  registered task must match. Missing runs, invalid input, and overlapping
+  executions reject registration without replacing the prior execution.
+- Reactivation uses fresh input with retained state, ID, reference, files, and
+  journal. It does not set `ctx.run.resumed`; that flag identifies restart recovery.
+  Failed and cancelled runs also require an explicit router decision to reactivate.
+- `ctx.runs({ includeFinished: true })` includes retained source runs with their
+  latest input. Its default remains active runs only. Old execution handles cannot
+  steer or cancel a later execution. The console continues to show the latest
+  execution; all executions remain in the journal and contribute to usage totals.
+- Each execution saves final state before its completion settles. A snapshot
+  failure rejects completion and logs an error. There is no transaction between
+  journal, snapshot, and external effects. Shutdown does not change finished runs.
 
 - `RUNLING_DATA_DIRECTORY` selects an instance's storage root. Run journals and
   snapshots use `runs/`; server diagnostics use `logs/`. This lets several
@@ -31,11 +46,14 @@ snapshots. Recovery re-enters the root task; it does not resume JavaScript execu
 - Roots decide which children and connections to create again. Child state can be
   passed as an ordinary sub-object in input. Input validators that transform data
   can replace that reference; task authors must account for this.
-- The console shows the latest attempt's activity and total token usage and cost
+- The console retains logs and timeline activity from all attempts and total token usage and cost
   across all attempts. Usage updates and final records replace the current
   attempt's total; they do not add the same tokens again. The reader also totals
   older journals without a migration. Missing prices remain marked incomplete.
-  Earlier attempts remain in the journal file. Logs and agent transcripts are
+  The timeline uses the first execution's start as its time origin, including idle
+  gaps. Earlier unfinished activities stay interrupted when another execution
+  starts. Journal timestamps remain relative to each execution; the reader projects
+  existing journals without migration or copied history. Logs and agent transcripts are
   not copied into the snapshot.
 - A source can inspect `ctx.runs()` and use original inputs to rebuild routing.
   Inboxes, adapter state maps, and agent sessions are not automatically restored.
@@ -84,4 +102,5 @@ the run directory remain caller-owned.
 ## Related
 
 - [ADR-010: Periodic workflow state snapshots](../adr/ADR-010-workflow-state-snapshots.md)
+- [ADR-012: Router-controlled workflow reactivation](../adr/ADR-012-router-controlled-reactivation.md)
 - [Workflow state guide](../workflow-state.md)

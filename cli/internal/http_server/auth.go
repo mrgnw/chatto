@@ -14,7 +14,6 @@ import (
 	"github.com/chattocorp/chatto/cli/internal/connectapi"
 	"github.com/chattocorp/chatto/cli/internal/core"
 	"github.com/chattocorp/chatto/cli/internal/email"
-	evtv1 "github.com/chattocorp/chatto/cli/internal/pb/chatto/core/evt/v1"
 	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
 	"golang.org/x/crypto/bcrypt"
@@ -123,37 +122,9 @@ func (s *HTTPServer) emailOTPExpirationText() string {
 }
 
 func (s *HTTPServer) setupAuthRoutes() {
-	// Invite links bind the durable invitation ID to the signed browser session,
-	// then immediately redirect so the bearer token does not remain in the URL.
-	s.router.GET("/invite/:token", func(c *gin.Context) {
-		c.Header("Cache-Control", "no-store")
-		c.Header("Referrer-Policy", "no-referrer")
-		c.Header("X-Robots-Tag", "noindex, nofollow")
-
-		session := sessions.Default(c)
-		session.Delete(accountInvitationSessionKey)
-		destination := "/register"
-		if s.config.Auth.InvitationRequired() {
-			invitationID, err := s.core.ValidateInviteLinkToken(c.Request.Context(), c.Param("token"))
-			if err != nil {
-				if !errors.Is(err, core.ErrInvitationInvalid) {
-					log.Error("Failed to validate invite link", "error", err)
-				}
-				destination = "/register?error=invalid_invitation"
-			} else {
-				session.Set(accountInvitationSessionKey, invitationID)
-				destination = "/register?invited=1"
-			}
-		}
-		if err := session.Save(); err != nil {
-			log.Error("Failed to save invite-link session", "error", err)
-			destination = "/register?error=invalid_invitation"
-		}
-		c.Redirect(http.StatusSeeOther, destination)
-	})
-
 	auth := s.router.Group("/auth")
 	auth.Use(limitLegacyRequestBody())
+	s.setupRegistrationAdmissionRoutes(auth)
 	auth.Use(func(c *gin.Context) {
 		s.requestContextWithAuditMetadata(c)
 		c.Next()
@@ -279,77 +250,6 @@ func (s *HTTPServer) setupAuthRoutes() {
 	}
 	auth.POST("logout", logout(false))
 	auth.POST("browser/logout", s.requireBrowserAuthenticationRequest, logout(true))
-
-	// The 0.5 bundled frontend calls this route only after its first cookie probe
-	// fails. It upgrades the typed session record and signed cookie written by
-	// 0.4 without accepting the legacy cookie on ordinary authenticated routes.
-	// Remove this compatibility bridge in 0.6.
-	auth.POST("browser/session/migrate", s.requireBrowserAuthenticationRequest, func(c *gin.Context) {
-		c.Header("Cache-Control", "no-store")
-		c.Header("Pragma", "no-cache")
-
-		if _, ok, err := s.cookiePresentedCredential(c); err != nil {
-			writeAuthenticationUnavailable(c)
-			return
-		} else if ok {
-			if err := removeLegacyCookieAuthentication(sessions.Default(c)); err != nil {
-				writeAuthenticationUnavailable(c)
-				return
-			}
-			if err := s.ensureCSRFToken(c); err != nil {
-				writeAuthenticationUnavailable(c)
-				return
-			}
-			c.Status(http.StatusNoContent)
-			return
-		}
-
-		session := sessions.Default(c)
-		sessionID, ok := legacyCookieSessionID(session)
-		if !ok {
-			c.JSON(http.StatusUnauthorized, gin.H{"error": "Authentication required"})
-			return
-		}
-		record, err := s.core.MigrateLegacyCookieSession(c.Request.Context(), sessionID, time.Now())
-		if err != nil {
-			if errors.Is(err, core.ErrCookieSessionNotFound) {
-				if err := removeLegacyCookieAuthentication(session); err != nil {
-					writeAuthenticationUnavailable(c)
-					return
-				}
-				c.JSON(http.StatusUnauthorized, gin.H{"error": "Authentication required"})
-				return
-			}
-			writeAuthenticationUnavailable(c)
-			return
-		}
-		if record.GetExpiresAt() == nil {
-			writeAuthenticationUnavailable(c)
-			return
-		}
-
-		cookieName, err := newBrowserSessionCookieName()
-		if err != nil {
-			writeAuthenticationUnavailable(c)
-			return
-		}
-		csrfToken, err := s.generateCSRFToken(csrfBindingForSession(record.GetUserId(), record))
-		if err != nil {
-			writeAuthenticationUnavailable(c)
-			return
-		}
-		if err := removeLegacyCookieAuthentication(session); err != nil {
-			writeAuthenticationUnavailable(c)
-			return
-		}
-
-		markAuthenticationCookieResponsePrivate(c)
-		s.clearBrowserSessionCookie(c)
-		s.setCSRFCookie(c, csrfToken)
-		c.Set(issuedBrowserSessionKey, issuedBrowserSession{name: cookieName, token: sessionID})
-		s.writeBrowserSessionCookie(c, cookieName, sessionID, record.GetExpiresAt().AsTime())
-		c.Status(http.StatusNoContent)
-	})
 
 	// Browser renewal is an explicit, CSRF-protected operation. Ordinary API,
 	// frontend, and WebSocket requests only validate the stable session handle,
@@ -628,7 +528,9 @@ func (s *HTTPServer) setupAuthRoutes() {
 		}
 
 		var req struct {
-			Email string `json:"email" binding:"required,email"`
+			Email          string `json:"email" binding:"required,email"`
+			AdmissionID    string `json:"admissionId"`
+			InvitationCode string `json:"invitationCode"`
 		}
 
 		if err := c.ShouldBindJSON(&req); err != nil {
@@ -640,20 +542,24 @@ func (s *HTTPServer) setupAuthRoutes() {
 
 		ctx := c.Request.Context()
 		invitationID := ""
-		if s.config.Auth.InvitationRequired() {
-			session := sessions.Default(c)
-			invitationID, _ = session.Get(accountInvitationSessionKey).(string)
-			if invitationID == "" {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "This invite link is invalid or no longer available"})
-				return
+		if err := s.core.WaitForRegistrationPolicy(ctx); err != nil {
+			c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Registration is temporarily unavailable"})
+			return
+		}
+		if s.core.InvitationRequired() {
+			var err error
+			if req.InvitationCode != "" {
+				invitationID, err = s.core.ValidateInvitationCode(ctx, req.InvitationCode)
+			} else {
+				invitationID, err = s.registrationInvitation(c, req.AdmissionID)
 			}
-
-			// Direct registration carries the invitation forward in the OTP flow,
-			// so it must not remain available to a later provider login in the same
-			// browser session.
-			session.Delete(accountInvitationSessionKey)
-			if err := session.Save(); err != nil {
-				log.Warn("Failed to clear invitation session after direct registration", "error", err)
+			if err != nil {
+				if errors.Is(err, core.ErrInvitationInvalid) {
+					c.JSON(http.StatusBadRequest, gin.H{"error": "This invitation code is invalid or no longer available"})
+				} else {
+					c.JSON(http.StatusServiceUnavailable, gin.H{"error": "Registration is temporarily unavailable"})
+				}
+				return
 			}
 		}
 
@@ -828,19 +734,10 @@ func (s *HTTPServer) setupAuthRoutes() {
 		}
 
 		// Create user with verified email atomically (use login as display name initially)
-		var user *evtv1.User
-		if s.config.Auth.InvitationRequired() {
-			if tokenData.InvitationID == "" {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "This invite link is invalid or no longer available"})
-				return
-			}
-			user, err = s.core.CreateVerifiedUserWithInvitation(ctx, "system", req.Login, req.Login, req.Password, tokenData.Email, tokenData.InvitationID)
-		} else {
-			user, err = s.core.CreateVerifiedUser(ctx, "system", req.Login, req.Login, req.Password, tokenData.Email)
-		}
+		user, err := s.core.CreateSelfServiceUser(ctx, "system", req.Login, req.Login, req.Password, tokenData.Email, tokenData.InvitationID)
 		if err != nil {
 			if errors.Is(err, core.ErrInvitationInvalid) {
-				c.JSON(http.StatusBadRequest, gin.H{"error": "This invite link is invalid or no longer available"})
+				c.JSON(http.StatusBadRequest, gin.H{"error": "This invitation code is invalid or no longer available"})
 				return
 			}
 			if errors.Is(err, core.ErrLoginAlreadyTaken) {
@@ -869,6 +766,7 @@ func (s *HTTPServer) setupAuthRoutes() {
 		}
 
 		// Server membership is implicit; global rooms appear automatically.
+		clearRegistrationAdmission(c, tokenData.InvitationID)
 
 		// Delete registration completion token (consumed)
 		if err := s.core.DeleteRegistrationToken(ctx, req.Token); err != nil {

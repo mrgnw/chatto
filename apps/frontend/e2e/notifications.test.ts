@@ -14,9 +14,11 @@ import {
 import * as routes from './routes';
 import { POLLING_INTERVALS, TIMEOUTS } from './constants';
 import {
+  connectPost,
   getRoomIdByNameViaConnect,
   postMessagesViaConnect,
-  updateNotificationPolicy
+  updateNotificationPolicy,
+  waitForReadMarkerViaConnect
 } from './fixtures/connectHelpers';
 
 test.describe('Mention Notifications', () => {
@@ -327,9 +329,7 @@ test.describe('Notification Bell & Page', () => {
 
     await notificationsPage.goto();
     await notificationsPage.expectNotificationCount(1, TIMEOUTS.REALTIME_EVENT);
-    await expect(
-      notificationsPage.getNotificationBySummary('sent you a direct message')
-    ).toBeVisible();
+    await expect(notificationsPage.getNotificationBySummary('sent you a DM')).toBeVisible();
   });
 });
 
@@ -475,6 +475,65 @@ test.describe('Notification Page Display', () => {
     await notificationsPage.expectNotificationCount(2, TIMEOUTS.COMPLEX_OPERATION);
   });
 
+  test('a reaction to an open thread reply stays read after closing the thread and reloading', async ({
+    page,
+    chatPage,
+    roomPage,
+    browser,
+    serverURL
+  }) => {
+    await createAndLoginTestUser(page);
+    await chatPage.goto();
+    await chatPage.enterRoom('general');
+    const roomId = await getRoomIdByNameViaConnect(page, 'general');
+    const root = await roomPage.sendMessage('Reaction read thread');
+    const rootId = (await root.getEventId())!;
+    await root.openThread();
+    await roomPage.postThreadReply('React while I am reading');
+    const reply = roomPage.getThreadMessage('React while I am reading');
+    const replyId = (await reply.getEventId())!;
+    await waitForReadMarkerViaConnect(page, roomId, replyId, rootId);
+
+    await withServerUser(browser, serverURL, async ({ page: actorPage }) => {
+      // Send through the other user's API while the recipient keeps focus.
+      await page.bringToFront();
+      await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+      // Finish the focus-return read first. Otherwise it could cover the new
+      // reaction and hide a missing read in the notification-arrival handler.
+      await Promise.all([
+        page.waitForResponse(
+          (response) => response.url().endsWith('/MarkThreadAsRead') && response.ok()
+        ),
+        page.evaluate(() => window.dispatchEvent(new Event('focus')))
+      ]);
+      await connectPost(actorPage, 'chatto.api.v1.MessageService/AddReaction', {
+        roomId,
+        messageEventId: replyId,
+        emoji: 'heart'
+      });
+      await reply.expectReaction('❤️', 1);
+      // Check durable state while the thread still suppresses local badges.
+      // A missing occurrence must not count as a successful read.
+      await expect
+        .poll(async () => {
+          const result = await connectPost<{
+            occurrences?: Array<{ unread?: boolean }>;
+          }>(page, 'chatto.api.v1.NotificationService/ListNotificationOccurrences');
+          return result.occurrences?.map((row) => row.unread ?? false);
+        })
+        .toEqual([false]);
+    });
+
+    await roomPage.closeThread();
+    const badge = chatPage.roomList
+      .locator('a', { hasText: '# general' })
+      .getByTestId('room-ambient-notification-badge');
+    await expect(badge).not.toBeVisible();
+    await page.reload();
+    await expect(page.getByText('Reaction read thread', { exact: true })).toBeVisible();
+    await expect(badge).not.toBeVisible();
+  });
+
   for (const targetKind of ['recent', 'older', 'thread'] as const) {
     test(`consolidates reactions and highlights the ${targetKind} message`, async ({
       page,
@@ -547,7 +606,7 @@ test.describe('Notification Page Display', () => {
       await expect(notification).toContainText('👍');
       await expect(notification).toContainText('❤️');
       await expect(notification).toContainText('and others reacted with');
-      await expect(notification).toContainText('to your message');
+      await expect(notification).toContainText('reacted with');
       await expect(notification).toContainText('#general');
       await expect(notification).not.toContainText(messageText);
       await expect(serverNotificationBadge(page)).toHaveClass(/bg-text/);
@@ -721,11 +780,23 @@ test.describe('Navigation from Notifications', () => {
     await notificationsPage.goto();
     const notification = notificationsPage.getNotificationBySummary('mentioned you');
     await expect(notification).toBeVisible({ timeout: TIMEOUTS.REALTIME_EVENT });
+    await page.getByRole('radio', { name: 'Unread', exact: true }).click();
+    await page.getByRole('radio', { name: 'Mentions', exact: true }).click();
+    await expect(page).toHaveURL(/status=unread&type=mentions/);
     await notificationsPage.clickNotification(notification);
 
     // Verify navigated to the room
     await page.waitForURL(routes.patterns.anyRoomWithQuery);
     await expect(page.getByRole('heading', { name: '# general' })).toBeVisible();
+    await page.goBack();
+    await expect(page.getByRole('radio', { name: 'Unread', exact: true })).toBeChecked();
+    await expect(page.getByRole('radio', { name: 'Mentions', exact: true })).toBeChecked();
+    await page.goForward();
+    await expect(page.getByRole('heading', { name: '# general' })).toBeVisible();
+    await page.goBack();
+    await page.reload();
+    await expect(page.getByRole('radio', { name: 'Unread', exact: true })).toBeChecked();
+    await expect(page.getByRole('radio', { name: 'Mentions', exact: true })).toBeChecked();
   });
 
   test('clicking reply notification navigates to the thread', async ({
@@ -1281,15 +1352,18 @@ test.describe('Clickable Notification Badges', () => {
     await expect(roomNotificationBadge).toHaveText('1');
 
     // Click the notification badge (not the room link itself).
-    await roomNotificationBadge.click();
+    const target = roomPage.getMessage(messageText).locator;
+    // Start observing before navigation can consume the brief highlight flash.
+    await Promise.all([
+      expect(target).toHaveClass(/highlight-flash/),
+      roomNotificationBadge.click()
+    ]);
 
     // Verify navigated to general room. Highlight intent is delivered via
     // PendingHighlightStore now (not ?highlight= URL param), so the URL is clean.
     await page.waitForURL(routes.patterns.anyRoom);
     await expect(page.getByRole('heading', { name: '# general' })).toBeVisible();
-    const target = roomPage.getMessage(messageText).locator;
     await expect(target).toBeInViewport();
-    await expect(target).toHaveClass(/highlight-flash/);
 
     // Verify notification badge is gone (notification was marked read).
     await expect(roomNotificationBadge).not.toBeVisible({ timeout: TIMEOUTS.UI_STANDARD });
@@ -1383,7 +1457,7 @@ test.describe('Room Reply Notifications', () => {
 
     // Verify notification page shows reply notification with correct content
     await notificationsPage.goto();
-    const notification = notificationsPage.getNotificationBySummary('replied to your message');
+    const notification = notificationsPage.getNotificationBySummary('replied to you');
     await expect(notification).toBeVisible({ timeout: TIMEOUTS.REALTIME_EVENT });
     await notificationsPage.expectNotificationWithLocation(notification, 'general');
   });
@@ -1409,7 +1483,7 @@ test.describe('Room Reply Notifications', () => {
 
     // User A: Click the reply notification
     await notificationsPage.goto();
-    const notification = notificationsPage.getNotificationBySummary('replied to your message');
+    const notification = notificationsPage.getNotificationBySummary('replied to you');
     await expect(notification).toBeVisible({ timeout: TIMEOUTS.REALTIME_EVENT });
     await notificationsPage.clickNotification(notification);
 

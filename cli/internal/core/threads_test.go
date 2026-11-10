@@ -18,8 +18,6 @@ import (
 )
 
 func TestPostThreadReplyWaitsForFollowProjectionBeforePlanningNotifications(t *testing.T) {
-	t.Parallel()
-
 	chattoCore, _ := setupTestCore(t)
 	ctx := testContext(t)
 	alice, err := chattoCore.CreateUser(ctx, SystemActorID, "thread-fence-alice", "Thread Fence Alice", "password")
@@ -97,8 +95,6 @@ func TestPostThreadReplyWaitsForFollowProjectionBeforePlanningNotifications(t *t
 }
 
 func TestChattoCore_PostMessage_Threading(t *testing.T) {
-	t.Parallel()
-
 	core, _ := setupTestCore(t)
 	ctx := testContext(t)
 
@@ -569,8 +565,6 @@ func TestChattoCore_PostMessage_Threading(t *testing.T) {
 }
 
 func TestChattoCore_ThreadLastOpened(t *testing.T) {
-	t.Parallel()
-
 	core, _ := setupTestCore(t)
 	ctx := testContext(t)
 
@@ -625,8 +619,6 @@ func TestChattoCore_ThreadLastOpened(t *testing.T) {
 }
 
 func TestChattoCore_PostMessagePreservesThreadLastOpened(t *testing.T) {
-	t.Parallel()
-
 	core, _ := setupTestCore(t)
 	ctx := testContext(t)
 
@@ -692,8 +684,6 @@ func TestChattoCore_PostMessagePreservesThreadLastOpened(t *testing.T) {
 }
 
 func TestChattoCore_ThreadFollow(t *testing.T) {
-	t.Parallel()
-
 	core, _ := setupTestCore(t)
 	ctx := testContext(t)
 
@@ -790,8 +780,6 @@ func TestChattoCore_ThreadFollow(t *testing.T) {
 }
 
 func TestChattoCore_GetThreadFollowers(t *testing.T) {
-	t.Parallel()
-
 	core, _ := setupTestCore(t)
 	ctx := testContext(t)
 
@@ -857,8 +845,6 @@ func TestChattoCore_GetThreadFollowers(t *testing.T) {
 }
 
 func TestChattoCore_ListFollowedThreads(t *testing.T) {
-	t.Parallel()
-
 	core, _ := setupTestCore(t)
 	ctx := testContext(t)
 
@@ -1113,8 +1099,6 @@ func TestChattoCore_ListFollowedThreads(t *testing.T) {
 }
 
 func TestChattoCore_ListFollowedThreadsUsesRootActivityForThreadsWithoutReplies(t *testing.T) {
-	t.Parallel()
-
 	core, _ := setupTestCore(t)
 	ctx := testContext(t)
 
@@ -1168,8 +1152,6 @@ func TestChattoCore_ListFollowedThreadsUsesRootActivityForThreadsWithoutReplies(
 }
 
 func TestChattoCore_PostMessage_AutoFollowsThread(t *testing.T) {
-	t.Parallel()
-
 	core, _ := setupTestCore(t)
 	ctx := testContext(t)
 
@@ -1208,8 +1190,6 @@ func TestChattoCore_PostMessage_AutoFollowsThread(t *testing.T) {
 }
 
 func TestChattoCore_PostMessage_ReFollowsAfterUnfollow(t *testing.T) {
-	t.Parallel()
-
 	core, _ := setupTestCore(t)
 	ctx := testContext(t)
 
@@ -1243,8 +1223,6 @@ func TestChattoCore_PostMessage_ReFollowsAfterUnfollow(t *testing.T) {
 }
 
 func TestChattoCore_PostMessage_RootAuthorUnfollowRespected(t *testing.T) {
-	t.Parallel()
-
 	core, _ := setupTestCore(t)
 	ctx := testContext(t)
 
@@ -1297,8 +1275,6 @@ func TestChattoCore_PostMessage_RootAuthorUnfollowRespected(t *testing.T) {
 }
 
 func TestChattoCore_PostMessage_DirectMentionAutoFollowsThread(t *testing.T) {
-	t.Parallel()
-
 	core, _ := setupTestCore(t)
 	ctx := testContext(t)
 
@@ -1338,8 +1314,6 @@ func TestChattoCore_PostMessage_DirectMentionAutoFollowsThread(t *testing.T) {
 }
 
 func TestChattoCore_PostMessage_DirectMentionRespectsExplicitUnfollow(t *testing.T) {
-	t.Parallel()
-
 	core, _ := setupTestCore(t)
 	ctx := testContext(t)
 
@@ -1389,8 +1363,6 @@ func TestChattoCore_PostMessage_DirectMentionRespectsExplicitUnfollow(t *testing
 }
 
 func TestChattoCore_PostMessage_BroadMentionsDoNotAutoFollowThread(t *testing.T) {
-	t.Parallel()
-
 	core, _ := setupTestCore(t)
 	ctx := testContext(t)
 
@@ -1423,8 +1395,6 @@ func TestChattoCore_PostMessage_BroadMentionsDoNotAutoFollowThread(t *testing.T)
 }
 
 func TestChattoCore_PostMessage_DisabledDirectMentionDoesNotAutoFollowThread(t *testing.T) {
-	t.Parallel()
-
 	core, _ := setupTestCore(t)
 	ctx := testContext(t)
 
@@ -1458,8 +1428,6 @@ func TestChattoCore_PostMessage_DisabledDirectMentionDoesNotAutoFollowThread(t *
 }
 
 func TestChattoCore_LegacyThreadFollowValueIsIgnored(t *testing.T) {
-	t.Parallel()
-
 	ctx := testContext(t)
 	_, nc := testutil.StartNATS(t)
 	cfg := config.CoreConfig{
@@ -1485,8 +1453,6 @@ func TestChattoCore_LegacyThreadFollowValueIsIgnored(t *testing.T) {
 }
 
 func TestChattoCore_NotifyThreadFollowers(t *testing.T) {
-	t.Parallel()
-
 	core, _ := setupTestCore(t)
 	ctx := testContext(t)
 
@@ -1531,8 +1497,6 @@ func TestChattoCore_NotifyThreadFollowers(t *testing.T) {
 }
 
 func TestChattoCore_PostMessage_ThreadReplyEcho(t *testing.T) {
-	t.Parallel()
-
 	core, _ := setupTestCore(t)
 	ctx := testContext(t)
 
@@ -1710,8 +1674,6 @@ func TestChattoCore_PostMessage_ThreadReplyEcho(t *testing.T) {
 }
 
 func TestChattoCore_PostMessage_EchoMentionNotification(t *testing.T) {
-	t.Parallel()
-
 	core, nc := setupTestCore(t)
 	ctx := testContext(t)
 
@@ -1794,8 +1756,6 @@ func TestChattoCore_PostMessage_EchoMentionNotification(t *testing.T) {
 }
 
 func TestChattoCore_PostMessage_InReplyToNotification(t *testing.T) {
-	t.Parallel()
-
 	core, _ := setupTestCore(t)
 	ctx := testContext(t)
 
@@ -1899,7 +1859,7 @@ func TestChattoCore_PostMessage_InReplyToNotification(t *testing.T) {
 		}
 	})
 
-	t.Run("mention and reply remain independent occurrences", func(t *testing.T) {
+	t.Run("mention and reply create one occurrence", func(t *testing.T) {
 		// Clear existing notifications
 		testDeleteAllNotificationOccurrences(t, core, alice.Id)
 
@@ -1916,11 +1876,11 @@ func TestChattoCore_PostMessage_InReplyToNotification(t *testing.T) {
 		}
 
 		occurrences := testNotificationOccurrences(t, core, alice.Id)
-		if len(occurrences) != 2 {
-			t.Fatalf("expected two exact occurrences, got %d", len(occurrences))
+		if len(occurrences) != 1 {
+			t.Fatalf("expected one occurrence, got %d", len(occurrences))
 		}
-		if !testOccurrencesHaveKinds(occurrences, notificationTestSignalDirectMention, notificationTestSignalReply) {
-			t.Errorf("expected mention and reply signals, got %+v", occurrences)
+		if !testOccurrenceHasKind(occurrences[0], notificationTestSignalDirectMention) {
+			t.Errorf("expected one mention signal, got %+v", occurrences)
 		}
 	})
 
@@ -1949,7 +1909,7 @@ func TestChattoCore_PostMessage_InReplyToNotification(t *testing.T) {
 		}
 	})
 
-	t.Run("thread mention keeps existing follower notification", func(t *testing.T) {
+	t.Run("thread mention and follower reason create one occurrence", func(t *testing.T) {
 		// Clear existing notifications
 		testDeleteAllNotificationOccurrences(t, core, alice.Id)
 
@@ -1966,11 +1926,11 @@ func TestChattoCore_PostMessage_InReplyToNotification(t *testing.T) {
 		}
 
 		occurrences := testNotificationOccurrences(t, core, alice.Id)
-		if len(occurrences) != 2 {
-			t.Fatalf("expected two exact occurrences, got %d", len(occurrences))
+		if len(occurrences) != 1 {
+			t.Fatalf("expected one occurrence, got %d", len(occurrences))
 		}
-		if !testOccurrencesHaveKinds(occurrences, notificationTestSignalDirectMention, notificationTestSignalFollowedThread) {
-			t.Errorf("expected mention and followed-thread signals, got %+v", occurrences)
+		if !testOccurrenceHasKind(occurrences[0], notificationTestSignalDirectMention) {
+			t.Errorf("expected one mention signal, got %+v", occurrences)
 		}
 	})
 
@@ -2006,8 +1966,8 @@ func TestChattoCore_PostMessage_InReplyToNotification(t *testing.T) {
 		}
 
 		bobOccurrences := testNotificationOccurrences(t, core, bob.Id)
-		if len(bobOccurrences) != 2 || !testOccurrencesHaveKinds(bobOccurrences, notificationTestSignalReply, notificationTestSignalFollowedThread) {
-			t.Fatalf("expected Bob to get reply and followed-thread occurrences, got %+v", bobOccurrences)
+		if len(bobOccurrences) != 1 || !testOccurrenceHasKind(bobOccurrences[0], notificationTestSignalReply) {
+			t.Fatalf("expected Bob to get one reply occurrence, got %+v", bobOccurrences)
 		}
 		var target *notificationv1.NotificationMessageReference
 		for _, occurrence := range bobOccurrences {
@@ -2020,7 +1980,7 @@ func TestChattoCore_PostMessage_InReplyToNotification(t *testing.T) {
 		}
 	})
 
-	t.Run("in-thread inReplyTo remains independent from followed-thread activity", func(t *testing.T) {
+	t.Run("in-thread inReplyTo and followed-thread activity create one occurrence", func(t *testing.T) {
 		// Clear existing notifications
 		testDeleteAllNotificationOccurrences(t, core, alice.Id)
 		testDeleteAllNotificationOccurrences(t, core, bob.Id)
@@ -2042,18 +2002,16 @@ func TestChattoCore_PostMessage_InReplyToNotification(t *testing.T) {
 		}
 
 		occurrences := testNotificationOccurrences(t, core, alice.Id)
-		if len(occurrences) != 2 {
-			t.Fatalf("expected two exact occurrences, got %d", len(occurrences))
+		if len(occurrences) != 1 {
+			t.Fatalf("expected one occurrence, got %d", len(occurrences))
 		}
-		if !testOccurrencesHaveKinds(occurrences, notificationTestSignalReply, notificationTestSignalFollowedThread) {
-			t.Errorf("expected reply and followed-thread signals, got %+v", occurrences)
+		if !testOccurrenceHasKind(occurrences[0], notificationTestSignalReply) {
+			t.Errorf("expected one reply signal, got %+v", occurrences)
 		}
 	})
 }
 
 func TestChattoCore_SetThreadLastReadEventIDDoesNotRegress(t *testing.T) {
-	t.Parallel()
-
 	core, _ := setupTestCore(t)
 	ctx := testContext(t)
 

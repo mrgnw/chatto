@@ -1,6 +1,7 @@
 {
   "permissions": {
     "descriptions": {
+      "room_manage_notice": "Publish, correct, republish, and clear room notices",
       "server_manage": "Update server settings (name, description, logo)",
       "server_manage_neighbors": "Manage the public Neighbor directory",
       "room_create": "Create new rooms",
@@ -25,10 +26,11 @@
       "admin_view_audit": "View the audit log in admin",
       "user_delete_any": "Delete another user's account",
       "user_delete_self": "Delete your own account",
-      "user_invite": "Create and manage invite links",
+      "user_manage_invites": "Create and manage codes. Each code admits one new account.",
+      "user_invite": "Create and manage your own invitation codes.",
       "user_manage_accounts": "Create users, edit account identity, reset passwords, attach verified emails, and clear login cooldowns",
       "user_manage_permissions": "Edit direct per-user permission overrides",
-      "bot_create": "Create bot accounts that you own",
+      "bot_create": "Create bot accounts",
       "bot_manage": "View and manage every bot account",
       "call_start": "Start a call (also requires call.join)",
       "call_join": "Join an active call",

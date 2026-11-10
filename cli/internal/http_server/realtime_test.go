@@ -6,16 +6,19 @@ import (
 	"encoding/base64"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/chattocorp/chatto/cli/internal/authctx"
 	"github.com/chattocorp/chatto/cli/internal/core"
 	"github.com/chattocorp/chatto/cli/internal/evtstream"
 	evtv1 "github.com/chattocorp/chatto/cli/internal/pb/chatto/core/evt/v1"
 	realtimev1 "github.com/chattocorp/chatto/cli/internal/pb/chatto/realtime/v1"
 	"github.com/chattocorp/chatto/cli/internal/publiccursor"
+	"github.com/chattocorp/chatto/cli/internal/readmodel"
 	"github.com/gorilla/websocket"
 	"google.golang.org/protobuf/proto"
 )
@@ -147,6 +150,9 @@ func readRealtimeCaughtUp(t testing.TB, conn *websocket.Conn) *realtimev1.Realti
 		frame, ok := readRealtimeServerFrame(t, conn, 5*time.Second)
 		if !ok {
 			t.Fatal("timed out waiting for realtime caught_up")
+		}
+		if close := frame.GetClose(); close != nil {
+			t.Fatalf("realtime closed before caught_up: %v", close)
 		}
 		if caughtUp := frame.GetCaughtUp(); caughtUp != nil {
 			return caughtUp
@@ -510,7 +516,7 @@ func TestRealtimeWebSocketReportsActualRecoveryIncludingEmptyResume(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	boundary, err := env.core.PlanRealtimeReplay(env.ctx, viewer.GetId(), "")
+	boundary, err := env.core.PlanRealtimeReplay(env.ctx, viewer.GetId(), "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -827,6 +833,98 @@ func TestRealtimeWebSocketClosesAfterCookieRevocation(t *testing.T) {
 	}
 }
 
+// Privilege audit events create small resume gaps. They must not exhaust the
+// stricter large-replay budget during normal use of the toggle.
+func TestRealtimeRapidPrivilegedModeChangesKeepResuming(t *testing.T) {
+	env := setupWebSocketTestServer(t)
+	// Freeze admission time so the test cannot pass by refilling replay tokens.
+	now := time.Now()
+	env.httpServer.realtimeCatchUps = newRealtimeCatchUpAdmissionWithLimits(8, 3, 20*time.Second, func() time.Time { return now })
+	if _, err := env.core.CreateUser(env.ctx, core.SystemActorID, "rapid-privilege", "Rapid Privilege", "password123"); err != nil {
+		t.Fatal(err)
+	}
+	env.login(t, "rapid-privilege", "password123")
+	var sessionID string
+	for _, cookie := range env.cookieJar.Cookies(mustParseURL(env.server.URL)) {
+		if isBrowserSessionCookieName(cookie.Name) {
+			sessionID = cookie.Value
+			break
+		}
+	}
+	if sessionID == "" {
+		t.Fatal("login did not set browser session cookie")
+	}
+	conn := env.dialRealtime(t)
+	subscribeRealtime(t, conn, "", realtimev1.RealtimeInitialState_REALTIME_INITIAL_STATE_SNAPSHOT, "")
+	cursor := readRealtimeCaughtUp(t, conn).GetCursor()
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for change := range 8 {
+		if _, err := env.core.SetCookiePrivilegedMode(env.ctx, sessionID, change%2 == 0); err != nil {
+			t.Fatalf("privilege change %d: %v", change, err)
+		}
+		conn = env.dialRealtime(t)
+		subscribeRealtime(t, conn, "", realtimev1.RealtimeInitialState_REALTIME_INITIAL_STATE_SNAPSHOT, cursor)
+		caughtUp := readRealtimeCaughtUp(t, conn)
+		if caughtUp.GetRecovery() != realtimev1.RealtimeRecovery_REALTIME_RECOVERY_RESUMED {
+			t.Fatalf("change %d recovery = %v, want resumed", change, caughtUp.GetRecovery())
+		}
+		cursor = caughtUp.GetCursor()
+		if err := conn.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+func TestRealtimeLargeReplayStillUsesStrictBudget(t *testing.T) {
+	env := setupWebSocketTestServer(t)
+	now := time.Now()
+	env.httpServer.realtimeCatchUps = newRealtimeCatchUpAdmissionWithLimits(8, 3, 20*time.Second, func() time.Time { return now })
+	user, err := env.core.CreateUser(env.ctx, core.SystemActorID, "large-replay", "Large Replay", "password123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.login(t, "large-replay", "password123")
+	conn := env.dialRealtime(t)
+	subscribeRealtime(t, conn, "", realtimev1.RealtimeInitialState_REALTIME_INITIAL_STATE_SNAPSHOT, "")
+	cursor := readRealtimeCaughtUp(t, conn).GetCursor()
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// A 33-sequence gap exceeds the small-replay bound. Reusing this cursor
+	// must consume the stricter replay bucket on every attempt.
+	for index := range 33 {
+		if _, err := env.core.UpdateUserBio(env.ctx, user.Id, fmt.Sprintf("revision %d", index)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for attempt := range 4 {
+		conn = env.dialRealtime(t)
+		subscribeRealtime(t, conn, "", realtimev1.RealtimeInitialState_REALTIME_INITIAL_STATE_SNAPSHOT, cursor)
+		if attempt < 3 {
+			if caughtUp := readRealtimeCaughtUp(t, conn); caughtUp.GetRecovery() != realtimev1.RealtimeRecovery_REALTIME_RECOVERY_RESUMED {
+				t.Fatalf("attempt %d recovery = %v, want resumed", attempt, caughtUp.GetRecovery())
+			}
+		} else {
+			// Admission must reject before any snapshot or event frame is sent.
+			frame, ok := readRealtimeServerFrame(t, conn, 5*time.Second)
+			if !ok {
+				t.Fatal("rate-limited attempt did not close")
+			}
+			if close := frame.GetClose(); close.GetCode() != realtimev1.RealtimeCloseCode_REALTIME_CLOSE_CODE_TEMPORARILY_UNAVAILABLE || close.GetRetryAfter().AsDuration() != 20*time.Second {
+				t.Fatalf("unexpected rate-limit frame: %v", frame)
+			}
+			if _, _, err := conn.ReadMessage(); !websocket.IsCloseError(err, websocket.CloseTryAgainLater) {
+				t.Fatalf("WebSocket close = %v, want retryable close", err)
+			}
+		}
+		if err := conn.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
 // Deactivation through another connection of the same session must end the
 // privileged fan-out state of this socket.
 func TestRealtimeWebSocketReconnectsAfterSessionPrivilegedModeDeactivation(t *testing.T) {
@@ -1051,6 +1149,163 @@ func TestRealtimeWebSocketDeliversPublicCursorlessEvent(t *testing.T) {
 	}
 }
 
+func TestRealtimeAccountDeactivationUpdatesOtherViewersAndReplays(t *testing.T) {
+	env := setupWebSocketTestServer(t)
+	manager, err := env.core.CreateUser(env.ctx, core.SystemActorID, "status-manager", "Manager", "password123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := env.core.CreateUser(env.ctx, core.SystemActorID, "status-target", "Target", "password123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := env.core.GrantUserPermission(env.ctx, core.SystemActorID, manager.Id, core.PermUserManageAccounts); err != nil {
+		t.Fatal(err)
+	}
+	token, err := env.core.CreateAuthToken(env.ctx, manager.Id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := env.dialRealtime(t)
+	subscribeRealtime(t, conn, token, realtimev1.RealtimeInitialState_REALTIME_INITIAL_STATE_LIVE_ONLY, "")
+	readRealtimeCaughtUp(t, conn)
+	if err := env.core.SetUserDeactivated(env.ctx, manager.Id, target.Id, true); err != nil {
+		t.Fatal(err)
+	}
+	event := readPublicRealtimeEvent(t, conn)
+	if event.GetUserAccountDeactivationChanged().GetUserId() != target.Id || !event.GetUserAccountDeactivationChanged().GetDeactivated() || event.GetActorId() != "" {
+		t.Fatalf("unexpected event: %v", event)
+	}
+	cursor := event.GetCursor()
+	conn.Close()
+	if err := env.core.SetUserDeactivated(env.ctx, manager.Id, target.Id, false); err != nil {
+		t.Fatal(err)
+	}
+	resumed := env.dialRealtime(t)
+	subscribeRealtime(t, resumed, token, realtimev1.RealtimeInitialState_REALTIME_INITIAL_STATE_LIVE_ONLY, cursor)
+	event = readPublicRealtimeEvent(t, resumed)
+	if event.GetUserAccountDeactivationChanged().GetUserId() != target.Id || event.GetUserAccountDeactivationChanged().GetDeactivated() {
+		t.Fatalf("unexpected reactivation replay: %v", event)
+	}
+}
+
+func TestRealtimeAccountWatchRejectsCredentialAfterReactivation(t *testing.T) {
+	env := setupWebSocketTestServer(t)
+	viewer, err := env.core.CreateUser(env.ctx, core.SystemActorID, "watch-viewer", "Viewer", "password123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := env.core.CreateUser(env.ctx, core.SystemActorID, "watch-manager", "Manager", "password123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := env.core.GrantUserPermission(env.ctx, core.SystemActorID, manager.Id, core.PermUserManageAccounts); err != nil {
+		t.Fatal(err)
+	}
+	token, err := env.core.CreateAuthToken(env.ctx, viewer.Id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := authctx.WithCredential(env.ctx, authctx.RuntimeCredential{
+		Kind: authctx.RuntimeCredentialKindBearerToken, UserID: viewer.Id, Handle: token,
+	})
+	s := &HTTPServer{core: env.core}
+	if _, err := s.revalidateRealtimeCredential(ctx); err != nil {
+		t.Fatal(err)
+	}
+	// Model a complete account transition after initial authentication but
+	// before the long-lived connection registers its invalidation watch.
+	for _, deactivated := range []bool{true, false} {
+		if err := env.core.SetUserDeactivated(env.ctx, manager.Id, viewer.Id, deactivated); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, stop, err := s.watchRealtimeAccountAccess(ctx, viewer.Id)
+	if stop != nil {
+		stop()
+	}
+	if !errors.Is(err, core.ErrNotAuthenticated) {
+		t.Fatalf("old credential accepted after reactivation: %v", err)
+	}
+}
+
+func TestRealtimeEventStreamClosureDuringCredentialRevocation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var frames []*realtimev1.RealtimeServerFrame
+	writeFrame := func(frame *realtimev1.RealtimeServerFrame) error {
+		frames = append(frames, frame)
+		return nil
+	}
+	terminateRealtimeForCredentialRevocation(func() {
+		cancel()
+		// Force the event loop to observe stream closure before the watcher
+		// writes its terminal frame. This ordering caused the CI failure.
+		closeRealtimeForEventStream(ctx, writeFrame)
+	}, writeFrame, func() {})
+	if len(frames) != 1 {
+		t.Fatalf("got %d close frames, want only the credential close", len(frames))
+	}
+	if close := frames[0].GetClose(); close.GetCode() != realtimev1.RealtimeCloseCode_REALTIME_CLOSE_CODE_AUTHENTICATION_REQUIRED || close.GetReconnect() {
+		t.Fatalf("close = %v, want terminal authentication_required", close)
+	}
+}
+
+func TestRealtimeUnexpectedEventStreamClosure(t *testing.T) {
+	var frames []*realtimev1.RealtimeServerFrame
+	closeRealtimeForEventStream(context.Background(), func(frame *realtimev1.RealtimeServerFrame) error {
+		frames = append(frames, frame)
+		return nil
+	})
+	if len(frames) != 1 {
+		t.Fatalf("got %d close frames, want one retryable close", len(frames))
+	}
+	if close := frames[0].GetClose(); close.GetCode() != realtimev1.RealtimeCloseCode_REALTIME_CLOSE_CODE_TEMPORARILY_UNAVAILABLE || !close.GetReconnect() || close.GetRetryAfter().AsDuration() != time.Second {
+		t.Fatalf("close = %v, want temporarily_unavailable with retry", close)
+	}
+}
+
+func TestRealtimeWebSocketClosesForAccountDeactivation(t *testing.T) {
+	env := setupWebSocketTestServer(t)
+	viewer, err := env.core.CreateUser(env.ctx, core.SystemActorID, "rt-deactivated", "RT Deactivated", "password123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager, err := env.core.CreateUser(env.ctx, core.SystemActorID, "rt-manager", "RT Manager", "password123")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := env.core.GrantUserPermission(env.ctx, core.SystemActorID, manager.GetId(), core.PermUserManageAccounts); err != nil {
+		t.Fatal(err)
+	}
+	token, err := env.core.CreateAuthToken(env.ctx, viewer.GetId())
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn := env.dialRealtime(t)
+	subscribeRealtime(t, conn, token, realtimev1.RealtimeInitialState_REALTIME_INITIAL_STATE_LIVE_ONLY, "")
+	readRealtimeCaughtUp(t, conn)
+	if err := env.core.SetUserDeactivated(env.ctx, manager.GetId(), viewer.GetId(), true); err != nil {
+		t.Fatal(err)
+	}
+	// Live frames can already be queued when account invalidation closes the
+	// stream. Require the terminal close within one deadline, not as the next frame.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		frame, ok := readRealtimeServerFrame(t, conn, time.Until(deadline))
+		if !ok {
+			t.Fatal("deactivation did not promptly close the authenticated socket")
+		}
+		if frame.GetClose() == nil {
+			continue
+		}
+		if frame.GetClose().GetCode() != realtimev1.RealtimeCloseCode_REALTIME_CLOSE_CODE_AUTHENTICATION_REQUIRED || frame.GetClose().GetReconnect() {
+			t.Fatalf("deactivation close = %+v, want terminal authentication_required", frame.GetClose())
+		}
+		return
+	}
+}
+
 func TestRealtimeWebSocketUsesCloseFrameForSessionTermination(t *testing.T) {
 	env := setupWebSocketTestServer(t)
 	viewer, err := env.core.CreateUser(env.ctx, core.SystemActorID, "rt-terminated", "RT Terminated", "password123")
@@ -1208,7 +1463,7 @@ func TestRealtimeWebSocketReportsCookieUserLookupFailureAsTemporary(t *testing.T
 		t.Fatalf("CreateUser: %v", err)
 	}
 	env.login(t, "rt-cookie-lookup", "password123")
-	env.httpServer.credentialUserLookup = func(context.Context, string) (*evtv1.User, error) {
+	env.httpServer.credentialUserLookup = func(context.Context, string) (*readmodel.User, error) {
 		return nil, errors.New("key store unavailable")
 	}
 

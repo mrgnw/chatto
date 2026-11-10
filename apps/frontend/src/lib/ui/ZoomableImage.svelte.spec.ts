@@ -2,6 +2,7 @@ import '../../app.css';
 import { describe, expect, it, vi } from 'vitest';
 import { render } from 'vitest-browser-svelte';
 import { tick } from 'svelte';
+import { userEvent } from 'vitest/browser';
 import ZoomableImage from './ZoomableImage.svelte';
 
 const src = `data:image/svg+xml,${encodeURIComponent(
@@ -17,7 +18,12 @@ async function mount() {
   await expect.poll(() => stage.clientWidth).toBe(400);
   await expect.poll(() => view.container.querySelector('img')?.naturalWidth).toBe(400);
   await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
-  return { query: view, stage, image: view.container.querySelector<HTMLImageElement>('img')! };
+  return {
+    query: view,
+    stage,
+    image: view.container.querySelector<HTMLImageElement>('img')!,
+    layer: view.container.querySelector<HTMLElement>('.image-canvas-layer')!
+  };
 }
 
 function pointer(stage: HTMLElement, type: string, id: number, x: number, y: number) {
@@ -33,13 +39,45 @@ function pointer(stage: HTMLElement, type: string, id: number, x: number, y: num
 }
 
 describe('ZoomableImage', () => {
+  it('zooms below Fit and resets', async () => {
+    const view = render(ZoomableImage, { src, alt: 'Test image', onerror: vi.fn() });
+    view.container.style.width = '400px';
+    view.container.style.height = '350px';
+    await expect.poll(() => view.container.querySelector('img')?.naturalWidth).toBe(400);
+    const decrease = view.getByRole('button', { name: 'Zoom out' });
+    await expect.element(decrease).toBeEnabled();
+    await decrease.click();
+    await expect.element(view.getByText('75%')).toBeVisible();
+    await decrease.click();
+    await decrease.click();
+    await expect.element(view.getByText('25%')).toBeVisible();
+    await expect.element(decrease).toBeDisabled();
+    expect(view.container.querySelector<HTMLElement>('.image-canvas-layer')!.style.transform).toBe(
+      'translate(0px, 0px) scale(0.25)'
+    );
+    expect(
+      [...view.container.querySelectorAll('.image-canvas-fade')].every((fade) =>
+        fade.classList.contains('opacity-0')
+      )
+    ).toBe(true);
+    await view.getByRole('button', { name: 'Fit' }).click();
+    await expect.element(view.getByText('100%')).toBeVisible();
+    await expect.element(decrease).toBeEnabled();
+  });
+
   it('steps beyond 400% to 1600%, disables the limit, and returns to Fit', async () => {
     const view = await mount();
+    const controls = view.query.container.querySelector('output')!.parentElement!;
+    expect(getComputedStyle(controls).position).toBe('static');
+    expect(view.stage.clientHeight).toBeLessThan(350);
+    const fades = [...view.query.container.querySelectorAll('.image-canvas-fade')];
+    expect(fades).toHaveLength(4);
     const increase = view.query.getByRole('button', { name: 'Zoom in' });
     const decrease = view.query.getByRole('button', { name: 'Zoom out' });
-    await expect.element(decrease).toBeDisabled();
+    await expect.element(decrease).toBeEnabled();
     for (let step = 0; step < 12; step += 1) await increase.click();
     await expect.element(view.query.getByText('400%')).toBeVisible();
+    expect(fades.every((fade) => !fade.classList.contains('opacity-0'))).toBe(true);
     await expect.element(increase).toBeEnabled();
     for (let step = 0; step < 48; step += 1) await increase.click();
     await expect.element(view.query.getByText('1600%')).toBeVisible();
@@ -48,13 +86,17 @@ describe('ZoomableImage', () => {
     await expect.element(view.query.getByText('1575%')).toBeVisible();
     await view.query.getByRole('button', { name: 'Fit' }).click();
     await expect.element(view.query.getByText('100%')).toBeVisible();
-    expect(view.image.style.transform).toBe('translate(0px, 0px) scale(1)');
+    expect(view.layer.style.transform).toBe('translate(0px, 0px) scale(1)');
+    expect(fades.every((fade) => fade.classList.contains('opacity-0'))).toBe(true);
   });
 
   it('keeps the wheel focal point steady and clamps dragging to the image', async () => {
     const view = await mount();
     view.stage.setPointerCapture = vi.fn();
     view.stage.hasPointerCapture = () => false;
+    view.image.setPointerCapture = vi.fn();
+    view.image.hasPointerCapture = (id) => id === 1;
+    view.image.releasePointerCapture = vi.fn();
     const rect = view.stage.getBoundingClientRect();
     const wheel = new WheelEvent('wheel', {
       bubbles: true,
@@ -66,22 +108,25 @@ describe('ZoomableImage', () => {
     view.stage.dispatchEvent(wheel);
     expect(wheel.defaultPrevented).toBe(true);
     await expect.element(view.query.getByText('800%')).toBeVisible();
-    expect(view.image.style.transform).toMatch(/translate\(-700(?:\.\d+)?px, 0px\) scale\(8/);
+    expect(view.layer.style.transform).toMatch(/translate\(-700(?:\.\d+)?px, 0px\) scale\(8/);
 
     // Events that start on the image bubble to the stage's pan handlers.
     pointer(view.image, 'pointerdown', 1, rect.left + 200, rect.top + 150);
+    expect(view.image.setPointerCapture).toHaveBeenCalledWith(1);
+    expect(view.stage.setPointerCapture).not.toHaveBeenCalled();
     pointer(view.image, 'pointermove', 1, rect.left + 10000, rect.top + 150);
     await tick();
     const fit = Math.min(view.stage.clientWidth / 400, view.stage.clientHeight / 300);
     const maxX = Math.max(0, (400 * fit * 8 - view.stage.clientWidth) / 2);
-    expect(view.image.style.transform).toContain(`translate(${maxX}px, 0px)`);
+    expect(view.layer.style.transform).toContain(`translate(${maxX}px, 0px)`);
     pointer(view.image, 'pointerup', 1, rect.left + 2000, rect.top + 150);
+    expect(view.image.releasePointerCapture).toHaveBeenCalledExactlyOnceWith(1);
     view.stage.dispatchEvent(new WheelEvent('wheel', { deltaY: -10000, cancelable: true }));
     await expect.element(view.query.getByText('1600%')).toBeVisible();
     await expect.element(view.query.getByRole('button', { name: 'Zoom in' })).toBeDisabled();
     view.stage.dispatchEvent(new WheelEvent('wheel', { deltaY: 10000, cancelable: true }));
-    await expect.element(view.query.getByText('100%')).toBeVisible();
-    expect(view.image.style.transform).toBe('translate(0px, 0px) scale(1)');
+    await expect.element(view.query.getByText('25%')).toBeVisible();
+    expect(view.layer.style.transform).toBe('translate(0px, 0px) scale(0.25)');
   });
 
   it('keeps the image as the hit target so the native image context menu works', async () => {
@@ -90,7 +135,38 @@ describe('ZoomableImage', () => {
     expect(document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2)).toBe(
       view.image
     );
-    const menu = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, button: 2 });
+    let menu: MouseEvent | undefined;
+    view.image.addEventListener('contextmenu', (event) => (menu = event), { once: true });
+    await userEvent.click(view.image, { button: 'right' });
+    expect(menu?.isTrusted).toBe(true);
+    expect(menu?.target).toBe(view.image);
+    expect(menu?.defaultPrevented).toBe(false);
+  });
+
+  it.each([
+    { button: 2, ctrlKey: false },
+    { button: 0, ctrlKey: true }
+  ])('leaves native menu presses on the image: %o', async ({ button, ctrlKey }) => {
+    const view = await mount();
+    view.stage.setPointerCapture = vi.fn();
+    view.image.setPointerCapture = vi.fn();
+    view.image.dispatchEvent(
+      new PointerEvent('pointerdown', {
+        bubbles: true,
+        pointerId: 1,
+        pointerType: 'mouse',
+        button,
+        ctrlKey
+      })
+    );
+    expect(view.stage.setPointerCapture).not.toHaveBeenCalled();
+    expect(view.image.setPointerCapture).not.toHaveBeenCalled();
+    const menu = new MouseEvent('contextmenu', {
+      bubbles: true,
+      cancelable: true,
+      button: 2,
+      ctrlKey
+    });
     view.image.dispatchEvent(menu);
     expect(menu.defaultPrevented).toBe(false);
   });
@@ -99,10 +175,12 @@ describe('ZoomableImage', () => {
     const view = await mount();
     view.stage.setPointerCapture = vi.fn();
     view.stage.hasPointerCapture = () => false;
+    view.image.setPointerCapture = vi.fn();
+    view.image.hasPointerCapture = () => false;
     const rect = view.stage.getBoundingClientRect();
     // A long-press image menu can end a touch without pointerup.
     pointer(view.image, 'pointerdown', 1, rect.left + 150, rect.top + 150);
-    pointer(view.stage, 'lostpointercapture', 1, rect.left + 150, rect.top + 150);
+    pointer(view.image, 'lostpointercapture', 1, rect.left + 150, rect.top + 150);
     pointer(view.image, 'pointerdown', 2, rect.left + 200, rect.top + 150);
     pointer(view.image, 'pointermove', 2, rect.left + 300, rect.top + 150);
     await tick();

@@ -12,8 +12,6 @@ import (
 )
 
 func TestBotAPIKeyFormatIsCompactAndAcceptsLegacySecrets(t *testing.T) {
-	t.Parallel()
-
 	botID := NewUserID()
 	key, err := NewBotAPIKey(botID)
 	if err != nil {
@@ -34,8 +32,6 @@ func TestBotAPIKeyFormatIsCompactAndAcceptsLegacySecrets(t *testing.T) {
 }
 
 func TestBotIncomingWebhookCredentialFormatIsCompact(t *testing.T) {
-	t.Parallel()
-
 	botID := NewUserID()
 	webhookID := NewBotIncomingWebhookID()
 	credential, err := NewBotIncomingWebhookCredentialForID(botID, webhookID)
@@ -59,8 +55,6 @@ func TestBotIncomingWebhookCredentialFormatIsCompact(t *testing.T) {
 }
 
 func TestParseBotAPIKeyRejectsNonCanonicalUserIDs(t *testing.T) {
-	t.Parallel()
-
 	encodedSecret := base64.RawURLEncoding.EncodeToString(make([]byte, botAPIKeySecretBytes))
 	for _, botID := range []string{
 		"*",
@@ -78,8 +72,6 @@ func TestParseBotAPIKeyRejectsNonCanonicalUserIDs(t *testing.T) {
 }
 
 func TestUserAuthProjectionReplaysHistoricalSoleBotAPIKeyEvents(t *testing.T) {
-	t.Parallel()
-
 	projection := newUserAuthProjection()
 	userID := NewUserID()
 	if err := projection.Apply(&evtv1.Event{Event: &evtv1.Event_UserAccountCreated{
@@ -116,8 +108,6 @@ func TestUserAuthProjectionReplaysHistoricalSoleBotAPIKeyEvents(t *testing.T) {
 }
 
 func TestBotAccountLifecycleAndAuthentication(t *testing.T) {
-	t.Parallel()
-
 	c, _ := setupTestCore(t)
 	ctx := testContext(t)
 	owner, err := c.CreateUser(ctx, SystemActorID, "bot-owner", "Bot Owner", "password123")
@@ -191,8 +181,6 @@ func TestBotAccountLifecycleAndAuthentication(t *testing.T) {
 }
 
 func TestBotAPIKeysAreNamedAndIndependentlyRevocable(t *testing.T) {
-	t.Parallel()
-
 	c, _ := setupTestCore(t)
 	ctx := testContext(t)
 	owner, err := c.CreateUser(ctx, SystemActorID, "multi-key-owner", "Multi-key Owner", "password123")
@@ -292,8 +280,6 @@ func TestBotAPIKeysAreNamedAndIndependentlyRevocable(t *testing.T) {
 }
 
 func TestBotAPIKeyLimitAndNameValidation(t *testing.T) {
-	t.Parallel()
-
 	c, _ := setupTestCore(t)
 	ctx := testContext(t)
 	owner, err := c.CreateUser(ctx, SystemActorID, "key-limit-owner", "Key-limit Owner", "password123")
@@ -319,8 +305,6 @@ func TestBotAPIKeyLimitAndNameValidation(t *testing.T) {
 }
 
 func TestConcurrentBotAPIKeyCreationCannotExceedActiveLimit(t *testing.T) {
-	t.Parallel()
-
 	c, _ := setupTestCore(t)
 	ctx := testContext(t)
 	owner, err := c.CreateUser(ctx, SystemActorID, "api-key-create-race-owner", "API-key Create Race Owner", "password123")
@@ -371,8 +355,6 @@ func TestConcurrentBotAPIKeyCreationCannotExceedActiveLimit(t *testing.T) {
 }
 
 func TestBotIncomingWebhookCredentialsAreIndependentFromEachOtherAndAPIKey(t *testing.T) {
-	t.Parallel()
-
 	c, _ := setupTestCore(t)
 	ctx := testContext(t)
 	owner, err := c.CreateUser(ctx, SystemActorID, "webhook-owner", "Webhook Owner", "password123")
@@ -437,8 +419,6 @@ func TestBotIncomingWebhookCredentialsAreIndependentFromEachOtherAndAPIKey(t *te
 }
 
 func TestBotIncomingWebhookActiveLimit(t *testing.T) {
-	t.Parallel()
-
 	c, _ := setupTestCore(t)
 	ctx := testContext(t)
 	owner, err := c.CreateUser(ctx, SystemActorID, "webhook-limit-owner", "Webhook Limit Owner", "password123")
@@ -461,8 +441,6 @@ func TestBotIncomingWebhookActiveLimit(t *testing.T) {
 }
 
 func TestConcurrentBotIncomingWebhookCreationCannotExceedActiveLimit(t *testing.T) {
-	t.Parallel()
-
 	c, _ := setupTestCore(t)
 	ctx := testContext(t)
 	owner, err := c.CreateUser(ctx, SystemActorID, "webhook-create-race-owner", "Webhook Create Race Owner", "password123")
@@ -513,8 +491,6 @@ func TestConcurrentBotIncomingWebhookCreationCannotExceedActiveLimit(t *testing.
 }
 
 func TestReassignBotOwnerRequiresGlobalManagementAndPreservesBotState(t *testing.T) {
-	t.Parallel()
-
 	c, _ := setupTestCore(t)
 	ctx := testContext(t)
 	owner, err := c.CreateUser(ctx, SystemActorID, "reassign-owner", "Reassign Owner", "password123")
@@ -595,14 +571,12 @@ func TestReassignBotOwnerRequiresGlobalManagementAndPreservesBotState(t *testing
 	if _, err := c.ReassignBotOwner(ctx, manager.GetId(), bot.User.GetId(), otherBot.User.GetId()); !errors.Is(err, ErrHumanAccountRequired) {
 		t.Fatalf("bot recipient reassignment err = %v, want ErrHumanAccountRequired", err)
 	}
-	if _, err := c.ReassignBotOwner(ctx, bot.User.GetId(), bot.User.GetId(), owner.GetId()); !errors.Is(err, ErrHumanAccountRequired) {
-		t.Fatalf("bot actor reassignment err = %v, want ErrHumanAccountRequired", err)
+	if _, err := c.ReassignBotOwner(ctx, bot.User.GetId(), bot.User.GetId(), owner.GetId()); !errors.Is(err, ErrPermissionDenied) {
+		t.Fatalf("ungranted bot actor reassignment err = %v, want ErrPermissionDenied", err)
 	}
 }
 
 func TestConcurrentBotOwnerReassignmentsConvergeWithoutStaleIndexes(t *testing.T) {
-	t.Parallel()
-
 	c, _ := setupTestCore(t)
 	ctx := testContext(t)
 	owner, err := c.CreateUser(ctx, SystemActorID, "concurrent-owner", "Concurrent Owner", "password123")
@@ -670,8 +644,6 @@ func TestConcurrentBotOwnerReassignmentsConvergeWithoutStaleIndexes(t *testing.T
 }
 
 func TestReassignBotOwnerIsRaceSafeWithOwnerDeletion(t *testing.T) {
-	t.Parallel()
-
 	for _, tc := range []struct {
 		name           string
 		deletePrevious bool
@@ -740,8 +712,6 @@ func TestReassignBotOwnerIsRaceSafeWithOwnerDeletion(t *testing.T) {
 }
 
 func TestGenericAdminMutationsRejectBotAccounts(t *testing.T) {
-	t.Parallel()
-
 	c, _ := setupTestCore(t)
 	ctx := testContext(t)
 	owner, err := c.CreateUser(ctx, SystemActorID, "admin-boundary-owner", "Admin Boundary Owner", "password123")
@@ -781,8 +751,6 @@ func TestGenericAdminMutationsRejectBotAccounts(t *testing.T) {
 }
 
 func TestBotPermissionsAreExplicitAndOwnerCapped(t *testing.T) {
-	t.Parallel()
-
 	c, _ := setupTestCore(t)
 	ctx := testContext(t)
 	owner, err := c.CreateUser(ctx, SystemActorID, "permission-owner", "Permission Owner", "password123")
@@ -809,8 +777,8 @@ func TestBotPermissionsAreExplicitAndOwnerCapped(t *testing.T) {
 	if decision, err := c.GetUserExplicitServerOverride(ctx, bot.User.GetId(), PermMessagePost); err != nil || decision != DecisionNone {
 		t.Fatalf("explicit bot override after rejected denial = %s, %v; want none", decision, err)
 	}
-	if err := c.SetUserPermissionState(ctx, owner.GetId(), bot.User.GetId(), PermissionTargetScope{Kind: MatrixScopeServer}, PermBotCreate, PermissionStateAllow); !errors.Is(err, ErrInvalidArgument) {
-		t.Fatalf("delegate bot.create err = %v, want ErrInvalidArgument", err)
+	if err := c.SetUserPermissionState(ctx, owner.GetId(), bot.User.GetId(), PermissionTargetScope{Kind: MatrixScopeServer}, PermBotCreate, PermissionStateAllow); err != nil {
+		t.Fatalf("delegate bot.create: %v", err)
 	}
 	if err := c.AssignServerRoleToExistingUser(ctx, SystemActorID, bot.User.GetId(), RoleAdmin); !errors.Is(err, ErrHumanAccountRequired) {
 		t.Fatalf("assign bot role err = %v, want ErrHumanAccountRequired", err)
@@ -873,8 +841,6 @@ func TestBotPermissionsAreExplicitAndOwnerCapped(t *testing.T) {
 }
 
 func TestBotMessageReadInclusionIntersectsBotAndOwnerAuthority(t *testing.T) {
-	t.Parallel()
-
 	tests := []struct {
 		name            string
 		slug            string
@@ -949,8 +915,6 @@ func TestBotPermissionCeilingResolvesExplicitInclusion(t *testing.T) {
 }
 
 func TestBotDMGrantIsScopedAndUsesDynamicOwnerCeiling(t *testing.T) {
-	t.Parallel()
-
 	c, _ := setupTestCore(t)
 	ctx := testContext(t)
 	owner, err := c.CreateUser(ctx, SystemActorID, "dm-bot-owner", "DM Bot Owner", "password123")
@@ -1018,8 +982,6 @@ func TestBotDMGrantIsScopedAndUsesDynamicOwnerCeiling(t *testing.T) {
 }
 
 func TestBotDirectMentionActivatesInteractionThread(t *testing.T) {
-	t.Parallel()
-
 	c, _ := setupTestCore(t)
 	ctx := testContext(t)
 	owner, err := c.CreateUser(ctx, SystemActorID, "activation-owner", "Activation Owner", "password123")
@@ -1085,8 +1047,6 @@ func TestBotDirectMentionActivatesInteractionThread(t *testing.T) {
 }
 
 func TestBotReplyToAuthoredMessageActivatesBot(t *testing.T) {
-	t.Parallel()
-
 	c, _ := setupTestCore(t)
 	ctx := testContext(t)
 	owner, err := c.CreateUser(ctx, SystemActorID, "reply-activation-owner", "Reply Activation Owner", "password123")
@@ -1126,8 +1086,6 @@ func TestBotReplyToAuthoredMessageActivatesBot(t *testing.T) {
 }
 
 func TestBotDisabledDirectMentionDoesNotActivateOrFollow(t *testing.T) {
-	t.Parallel()
-
 	c, _ := setupTestCore(t)
 	ctx := testContext(t)
 	owner, err := c.CreateUser(ctx, SystemActorID, "muted-activation-owner", "Muted Activation Owner", "password123")
@@ -1168,9 +1126,7 @@ func TestBotDisabledDirectMentionDoesNotActivateOrFollow(t *testing.T) {
 	}
 }
 
-func TestBotCannotStartDMButCanParticipateInHumanStartedDM(t *testing.T) {
-	t.Parallel()
-
+func TestBotStartDMUsesNormalPermissions(t *testing.T) {
 	c, _ := setupTestCore(t)
 	ctx := testContext(t)
 	owner, err := c.CreateUser(ctx, SystemActorID, "dm-start-owner", "DM Start Owner", "password123")
@@ -1193,11 +1149,14 @@ func TestBotCannotStartDMButCanParticipateInHumanStartedDM(t *testing.T) {
 	if allowed, err := c.CanStartDM(ctx, bot.User.GetId()); err != nil || allowed {
 		t.Fatalf("bot CanStartDM without message.post = %v, %v; want false, nil", allowed, err)
 	}
-	if err := c.SetUserPermissionState(ctx, owner.GetId(), bot.User.GetId(), PermissionTargetScope{Kind: MatrixScopeServer}, PermMessagePost, PermissionStateAllow); err != nil {
+	if _, _, err := c.RoomCommands().StartDM(ctx, RoomStartDMInput{ActorID: bot.User.GetId(), ParticipantIDs: []string{participant.GetId()}}); !errors.Is(err, ErrPermissionDenied) {
+		t.Fatalf("bot StartDM without grant = %v, want ErrPermissionDenied", err)
+	}
+	if err := c.SetUserPermissionState(ctx, owner.GetId(), bot.User.GetId(), PermissionTargetScope{Kind: MatrixScopeDM}, PermMessagePost, PermissionStateAllow); err != nil {
 		t.Fatalf("grant bot message.post: %v", err)
 	}
-	if allowed, err := c.CanStartDM(ctx, bot.User.GetId()); err != nil || allowed {
-		t.Fatalf("bot CanStartDM with message.post = %v, %v; want false, nil", allowed, err)
+	if allowed, err := c.CanStartDM(ctx, bot.User.GetId()); err != nil || !allowed {
+		t.Fatalf("bot CanStartDM with message.post = %v, %v; want true, nil", allowed, err)
 	}
 	if allowed, err := c.CanStartDM(ctx, "missing-dm-actor"); allowed || !errors.Is(err, ErrNotFound) {
 		t.Fatalf("missing actor CanStartDM = %v, %v; want false, ErrNotFound", allowed, err)
@@ -1205,23 +1164,26 @@ func TestBotCannotStartDMButCanParticipateInHumanStartedDM(t *testing.T) {
 	for name, participantIDs := range map[string][]string{
 		"self":  nil,
 		"human": {participant.GetId()},
-		"group": {participant.GetId(), other.GetId()},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, _, err := c.RoomCommands().StartDM(ctx, RoomStartDMInput{
+			room, created, err := c.RoomCommands().StartDM(ctx, RoomStartDMInput{
 				ActorID: bot.User.GetId(), ParticipantIDs: participantIDs,
-			}); !errors.Is(err, ErrPermissionDenied) {
-				t.Fatalf("bot StartDM error = %v, want ErrPermissionDenied", err)
+			})
+			if err != nil || !created {
+				t.Fatalf("bot StartDM created=%v, err=%v", created, err)
 			}
 			roomID := DMRoomID(ensureInList(participantIDs, bot.User.GetId()))
-			if _, err := c.GetRoom(ctx, KindDM, roomID); err == nil {
-				t.Fatal("bot StartDM created a DM despite the account-kind invariant")
+			if room.GetId() != roomID {
+				t.Fatalf("bot StartDM ID=%q, want %q", room.GetId(), roomID)
 			}
 		})
 	}
+	if _, _, err := c.RoomCommands().StartDM(ctx, RoomStartDMInput{ActorID: bot.User.GetId(), ParticipantIDs: []string{participant.GetId(), other.GetId()}}); !errors.Is(err, ErrInvalidArgument) {
+		t.Fatalf("bot group StartDM = %v, want ErrInvalidArgument", err)
+	}
 
 	dm, created, err := c.RoomCommands().StartDM(ctx, RoomStartDMInput{
-		ActorID: participant.GetId(), ParticipantIDs: []string{bot.User.GetId()},
+		ActorID: other.GetId(), ParticipantIDs: []string{bot.User.GetId()},
 	})
 	if err != nil {
 		t.Fatalf("human StartDM with bot: %v", err)
@@ -1229,10 +1191,10 @@ func TestBotCannotStartDMButCanParticipateInHumanStartedDM(t *testing.T) {
 	if !created {
 		t.Fatal("human StartDM with bot did not create the DM")
 	}
-	if _, _, err := c.RoomCommands().StartDM(ctx, RoomStartDMInput{
-		ActorID: bot.User.GetId(), ParticipantIDs: []string{participant.GetId()},
-	}); !errors.Is(err, ErrPermissionDenied) {
-		t.Fatalf("bot StartDM for existing DM error = %v, want ErrPermissionDenied", err)
+	if found, created, err := c.RoomCommands().StartDM(ctx, RoomStartDMInput{
+		ActorID: bot.User.GetId(), ParticipantIDs: []string{other.GetId()},
+	}); err != nil || created || found.GetId() != dm.GetId() {
+		t.Fatalf("bot StartDM for existing DM created=%v, err=%v", created, err)
 	}
 	reply, err := c.Messages().PostMessage(ctx, MessagePostInput{
 		ActorID: bot.User.GetId(), RoomID: dm.GetId(), Body: "bot reply in human-started DM",
@@ -1243,14 +1205,35 @@ func TestBotCannotStartDMButCanParticipateInHumanStartedDM(t *testing.T) {
 	if reply.Event == nil {
 		t.Fatal("bot PostMessage returned no event")
 	}
-	if _, err := c.RoomTimelineReads().GetMessage(ctx, participant.GetId(), dm.GetId(), reply.Event.GetId()); err != nil {
+	if _, err := c.RoomTimelineReads().GetMessage(ctx, other.GetId(), dm.GetId(), reply.Event.GetId()); err != nil {
 		t.Fatalf("human GetMessage for bot reply: %v", err)
+	}
+	if err := c.AssignAdminRole(ctx, participant.GetId()); err != nil {
+		t.Fatal(err)
+	}
+	for _, state := range []PermissionState{PermissionStateDeny, PermissionStateAllow} {
+		if err := c.SetUserPermissionState(ctx, participant.GetId(), owner.GetId(), PermissionTargetScope{Kind: MatrixScopeDM}, PermMessagePost, state); err != nil {
+			t.Fatal(err)
+		}
+		allowed, err := c.CanStartDM(ctx, bot.User.GetId())
+		if err != nil || allowed != (state == PermissionStateAllow) {
+			t.Fatalf("owner ceiling state=%v: allowed=%v, err=%v", state, allowed, err)
+		}
+		if state == PermissionStateDeny {
+			if _, _, err := c.RoomCommands().StartDM(ctx, RoomStartDMInput{ActorID: bot.User.GetId(), ParticipantIDs: []string{owner.GetId()}}); !errors.Is(err, ErrPermissionDenied) {
+				t.Fatalf("new DM after owner revocation = %v", err)
+			}
+			if found, created, err := c.RoomCommands().StartDM(ctx, RoomStartDMInput{ActorID: bot.User.GetId(), ParticipantIDs: []string{other.GetId()}}); err != nil || created || found.GetId() != dm.GetId() {
+				t.Fatalf("existing DM after owner revocation created=%v, err=%v", created, err)
+			}
+			if _, err := c.Messages().PostMessage(ctx, MessagePostInput{ActorID: bot.User.GetId(), RoomID: dm.GetId(), Body: "denied"}); !errors.Is(err, ErrPermissionDenied) {
+				t.Fatalf("posting after owner revocation = %v", err)
+			}
+		}
 	}
 }
 
 func TestCanonicalUserPermissionManagementUsesBotAuthorization(t *testing.T) {
-	t.Parallel()
-
 	c, _ := setupTestCore(t)
 	ctx := testContext(t)
 	owner, err := c.CreateUser(ctx, SystemActorID, "canonical-owner", "Canonical Owner", "password123")
@@ -1287,11 +1270,11 @@ func TestCanonicalUserPermissionManagementUsesBotAuthorization(t *testing.T) {
 		t.Fatalf("bot manager SetUserPermissionState: %v", err)
 	}
 
-	if _, err := c.GetUserPermissionMatrix(ctx, bot.User.GetId(), bot.User.GetId()); !errors.Is(err, ErrHumanAccountRequired) {
-		t.Fatalf("bot caller GetUserPermissionMatrix err = %v, want ErrHumanAccountRequired", err)
+	if _, err := c.GetUserPermissionMatrix(ctx, bot.User.GetId(), bot.User.GetId()); !errors.Is(err, ErrPermissionDenied) {
+		t.Fatalf("ungranted bot caller GetUserPermissionMatrix err = %v, want ErrPermissionDenied", err)
 	}
-	if err := c.SetUserPermissionState(ctx, bot.User.GetId(), bot.User.GetId(), PermissionTargetScope{Kind: MatrixScopeServer}, PermMessagePost, PermissionStateDeny); !errors.Is(err, ErrHumanAccountRequired) {
-		t.Fatalf("bot caller SetUserPermissionState err = %v, want ErrHumanAccountRequired", err)
+	if err := c.SetUserPermissionState(ctx, bot.User.GetId(), bot.User.GetId(), PermissionTargetScope{Kind: MatrixScopeServer}, PermMessagePost, PermissionStateDeny); !errors.Is(err, ErrPermissionDenied) {
+		t.Fatalf("ungranted bot caller SetUserPermissionState err = %v, want ErrPermissionDenied", err)
 	}
 	if _, err := c.GetUserPermissionMatrix(ctx, "", "missing-user"); !errors.Is(err, ErrNotAuthenticated) {
 		t.Fatalf("unauthenticated GetUserPermissionMatrix err = %v, want ErrNotAuthenticated", err)
@@ -1302,8 +1285,6 @@ func TestCanonicalUserPermissionManagementUsesBotAuthorization(t *testing.T) {
 }
 
 func TestCanonicalUserPermissionMatrixForBotFiltersHiddenRoomsAndKeepsDirectoryGroups(t *testing.T) {
-	t.Parallel()
-
 	c, _ := setupTestCore(t)
 	ctx := testContext(t)
 	owner, err := c.CreateUser(ctx, SystemActorID, "matrix-owner", "Matrix Owner", "password123")
@@ -1385,8 +1366,6 @@ func TestCanonicalUserPermissionMatrixForBotFiltersHiddenRoomsAndKeepsDirectoryG
 }
 
 func TestSetUserPermissionRejectsNonexistentBotScopesWithoutPersisting(t *testing.T) {
-	t.Parallel()
-
 	c, _ := setupTestCore(t)
 	ctx := testContext(t)
 	owner, err := c.CreateUser(ctx, SystemActorID, "scope-owner", "Scope Owner", "password123")
@@ -1425,8 +1404,6 @@ func TestSetUserPermissionRejectsNonexistentBotScopesWithoutPersisting(t *testin
 }
 
 func TestSetUserPermissionUsesCurrentRoomGroupForBotOwnerCeiling(t *testing.T) {
-	t.Parallel()
-
 	c, _ := setupTestCore(t)
 	ctx := testContext(t)
 	owner, err := c.CreateUser(ctx, SystemActorID, "moving-room-owner", "Moving Room Owner", "password123")
@@ -1467,8 +1444,6 @@ func TestSetUserPermissionUsesCurrentRoomGroupForBotOwnerCeiling(t *testing.T) {
 }
 
 func TestDeletingOwnerCascadesOwnedBots(t *testing.T) {
-	t.Parallel()
-
 	c, _ := setupTestCore(t)
 	ctx := testContext(t)
 	owner, err := c.CreateUser(ctx, SystemActorID, "cascade-owner", "Cascade Owner", "password123")
@@ -1496,8 +1471,6 @@ func TestDeletingOwnerCascadesOwnedBots(t *testing.T) {
 }
 
 func TestHumanAndBotUsernamesShareValidation(t *testing.T) {
-	t.Parallel()
-
 	c, _ := setupTestCore(t)
 	ctx := testContext(t)
 	human, err := c.CreateUser(ctx, SystemActorID, "human_bot", "Human", "password123")
@@ -1530,8 +1503,6 @@ func TestHumanAndBotUsernamesShareValidation(t *testing.T) {
 }
 
 func TestBotOwnerUpdatesBotProfile(t *testing.T) {
-	t.Parallel()
-
 	c, _ := setupTestCore(t)
 	ctx := testContext(t)
 	owner, err := c.CreateUser(ctx, SystemActorID, "profile-bot-owner", "Profile Bot Owner", "password123")
@@ -1629,8 +1600,6 @@ func TestBotOwnerUpdatesBotProfile(t *testing.T) {
 // Fresh servers grant bot.create to admin only. Ordinary members need an
 // explicit grant before they can create bots.
 func TestBotCreationDefaultsToAdmins(t *testing.T) {
-	t.Parallel()
-
 	c, _ := setupTestCore(t)
 	ctx := testContext(t)
 	member, err := c.CreateUser(ctx, SystemActorID, "plain-member", "Member", "password123")

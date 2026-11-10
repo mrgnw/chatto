@@ -1,5 +1,6 @@
 import { createChattoClient, type ConnectAPIConfig } from '@chatto/client/api/connect';
 import { browserCookieAuthenticationHeaders } from '@chatto/client/auth/authenticationMode';
+import { type UsernameChoiceAvailability } from '@chatto/client/api/actionAvailability';
 import { ExternalIdentityAuthService } from '@chatto/api-types/chatto/auth/v1/external_identity_auth_connect';
 import {
   ExternalIdentityFlowKind,
@@ -24,9 +25,12 @@ export type PendingExternalIdentityInfo = {
   providerLabel: string;
   verifiedEmail: string | null;
   loginHint: string;
+  chooseUsername?: UsernameChoiceAvailability;
   displayNameHint: string;
   boundUserId: string | null;
   redirectPath: string | null;
+  /** A new identity needs admission before it can create an account. */
+  invitationRequired: boolean;
 };
 
 export type LinkedExternalIdentityInfo = {
@@ -148,9 +152,11 @@ function pendingIdentity(pending?: APIPendingExternalIdentity): PendingExternalI
     providerLabel: pending.providerLabel,
     verifiedEmail: pending.verifiedEmail || null,
     loginHint: pending.loginHint,
+    chooseUsername: pending.chooseUsername,
     displayNameHint: pending.displayNameHint,
     boundUserId: pending.boundUserId || null,
-    redirectPath: pending.redirectPath || null
+    redirectPath: pending.redirectPath || null,
+    invitationRequired: pending.invitationRequired
   };
 }
 

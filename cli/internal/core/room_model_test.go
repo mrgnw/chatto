@@ -2,16 +2,82 @@ package core
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/chattocorp/chatto/cli/internal/evtstream"
 	evtv1 "github.com/chattocorp/chatto/cli/internal/pb/chatto/core/evt/v1"
 	"github.com/chattocorp/chatto/pkg/events"
+	"github.com/stretchr/testify/require"
 )
 
-func TestNewRoomModelWiresDependencies(t *testing.T) {
-	t.Parallel()
+func TestRoomModelThreadParticipantsOnlyIncludeReplyAuthors(t *testing.T) {
+	for _, replyCount := range []int{0, 2, 60} {
+		t.Run(fmt.Sprintf("replies-%d", replyCount), func(t *testing.T) {
+			timeline := NewRoomTimelineProjection()
+			threads := NewThreadProjection()
+			model := &RoomModel{timeline: detachedTestProjectionHandle(timeline), threads: detachedTestProjectionHandle(threads)}
+			// Historical imports use the mapped message author, not the operator.
+			root := postedEvent(postedOpts{envelopeID: "ROOT", eventID: "ROOT", roomID: "R1", actorID: "OPERATOR", at: 1})
+			root.GetMessagePosted().AuthorId = "AUTHOR"
+			facts := []*evtv1.Event{root, threadCreatedEvent("THREAD", "R1", "ROOT", "AUTHOR", 2)}
+			for i := range replyCount {
+				id := fmt.Sprintf("REPLY-%02d", i)
+				facts = append(facts, postedEvent(postedOpts{envelopeID: id, eventID: id, roomID: "R1", actorID: fmt.Sprintf("U%02d", i), inThread: "ROOT", at: i + 3}))
+			}
+			applyAll(t, timeline, facts)
+			applyAll(t, threads, facts)
+			check := func(wantCount, wantReplies int) {
+				t.Helper()
+				metadata := model.threadMetadata("ROOT")
+				require.True(t, metadata.Exists)
+				require.Equal(t, wantReplies, metadata.ReplyCount)
+				require.Equal(t, wantCount, metadata.ParticipantCount)
+				require.Len(t, metadata.ParticipantIDs, min(wantCount, maxThreadParticipants))
+				if wantReplies > replyCount {
+					require.Equal(t, "AUTHOR", metadata.ParticipantIDs[0])
+				} else {
+					require.NotContains(t, metadata.ParticipantIDs, "AUTHOR")
+				}
+				ids := threads.ParticipantIDs("ROOT", model.threadRootAuthorID("ROOT"))
+				require.Len(t, ids, wantCount)
+				if wantReplies > replyCount {
+					require.Equal(t, "AUTHOR", ids[0])
+				} else {
+					require.NotContains(t, ids, "AUTHOR")
+				}
+			}
+			check(replyCount, replyCount)
+			// A late root-author reply adds the author once,
+			// including when other authors fill the reply preview.
+			seq := uint64(len(facts) + 1)
+			reply := postedEvent(postedOpts{envelopeID: "AUTHOR-REPLY", eventID: "AUTHOR-REPLY", roomID: "R1", actorID: "AUTHOR", inThread: "ROOT", at: 100})
+			require.NoError(t, threads.Apply(reply, seq))
+			check(replyCount+1, replyCount+1)
+			for _, projection := range []interface {
+				Snapshot() ([]byte, error)
+				Restore([]byte) error
+			}{timeline, threads} {
+				snapshot, err := projection.Snapshot()
+				require.NoError(t, err)
+				require.NoError(t, projection.Restore(snapshot))
+			}
+			check(replyCount+1, replyCount+1)
+			require.NoError(t, threads.Apply(retractedEvent("RETRACT", "AUTHOR-REPLY", "R1", "AUTHOR", "removed", 101), seq+1))
+			check(replyCount, replyCount)
+			shred := userKeyShreddedSnapshotTestEvent("SHRED", "AUTHOR")
+			require.NoError(t, timeline.Apply(shred, seq+2))
+			require.NoError(t, threads.Apply(shred, seq+2))
+			metadata := model.threadMetadata("ROOT")
+			require.Equal(t, replyCount, metadata.ParticipantCount)
+			require.NotContains(t, metadata.ParticipantIDs, "AUTHOR")
+			require.NotContains(t, threads.ParticipantIDs("ROOT", model.threadRootAuthorID("ROOT")), "AUTHOR")
+			require.False(t, model.threadMetadata("MISSING").Exists)
+		})
+	}
+}
 
+func TestNewRoomModelWiresDependencies(t *testing.T) {
 	directory := NewRoomDirectoryProjection()
 	groupLayout := NewRoomGroupLayoutProjection()
 	timeline := NewRoomTimelineProjection()
@@ -64,8 +130,6 @@ func TestNewRoomModelWiresDependencies(t *testing.T) {
 }
 
 func TestRoomModelAppendDirectoryEventuallyPublishesAndWaits(t *testing.T) {
-	t.Parallel()
-
 	harness := newTestEventHarness(t)
 	directory := NewRoomDirectoryProjection()
 	directoryProjector := harness.projector(directory)
@@ -92,8 +156,6 @@ func TestRoomModelAppendDirectoryEventuallyPublishesAndWaits(t *testing.T) {
 }
 
 func TestRoomModelWaitForDirectoryAndTimeline(t *testing.T) {
-	t.Parallel()
-
 	harness := newTestEventHarness(t)
 	directory := NewRoomDirectoryProjection()
 	directoryProjector := harness.projector(directory)
@@ -123,8 +185,6 @@ func TestRoomModelWaitForDirectoryAndTimeline(t *testing.T) {
 }
 
 func TestRoomModelWaitForTimelineAndThreads(t *testing.T) {
-	t.Parallel()
-
 	harness := newTestEventHarness(t)
 	timeline := NewRoomTimelineProjection()
 	timelineProjector := harness.projector(timeline)
@@ -158,8 +218,6 @@ func TestRoomModelWaitForTimelineAndThreads(t *testing.T) {
 }
 
 func TestRoomModelWaitForLiveEVTEventSkipsThreadsForReaction(t *testing.T) {
-	t.Parallel()
-
 	harness := newTestEventHarness(t)
 	timeline := NewRoomTimelineProjection()
 	timelineProjector := harness.projector(timeline)
@@ -193,8 +251,6 @@ func TestRoomModelWaitForLiveEVTEventSkipsThreadsForReaction(t *testing.T) {
 }
 
 func TestRoomModelWaitForLiveEVTEventSkipsThreadsForCall(t *testing.T) {
-	t.Parallel()
-
 	harness := newTestEventHarness(t)
 	timeline := NewRoomTimelineProjection()
 	timelineProjector := harness.projector(timeline)
@@ -222,8 +278,6 @@ func TestRoomModelWaitForLiveEVTEventSkipsThreadsForCall(t *testing.T) {
 }
 
 func TestRoomModelWaitForThreads(t *testing.T) {
-	t.Parallel()
-
 	harness := newTestEventHarness(t)
 	threads := NewThreadProjection()
 	threadsProjector := harness.projector(threads)
@@ -251,8 +305,6 @@ func TestRoomModelWaitForThreads(t *testing.T) {
 }
 
 func TestRoomModelWaitForReactionsCurrent(t *testing.T) {
-	t.Parallel()
-
 	harness := newTestEventHarness(t)
 	reactions := NewReactionProjection()
 	reactionsProjector := harness.projector(reactions)
@@ -278,8 +330,6 @@ func TestRoomModelWaitForReactionsCurrent(t *testing.T) {
 }
 
 func TestRoomModelWaitForReactions(t *testing.T) {
-	t.Parallel()
-
 	harness := newTestEventHarness(t)
 	reactions := NewReactionProjection()
 	reactionsProjector := harness.projector(reactions)
@@ -309,7 +359,6 @@ func TestRoomModelWaitForReactions(t *testing.T) {
 // Catalog reads must work with only their projection owner and return detached
 // values, so a caller cannot change state observed by another service.
 func TestRoomModelCatalogReadsWithoutCore(t *testing.T) {
-	t.Parallel()
 	directory := NewRoomDirectoryProjection()
 	groups := NewRoomGroupLayoutProjection()
 	model := newRoomModel(detachedTestProjectionHandle(directory), detachedTestProjectionHandle(groups), events.ProjectionHandle[*RoomTimelineProjection]{}, events.ProjectionHandle[*ThreadProjection]{}, events.ProjectionHandle[*ReactionProjection]{})

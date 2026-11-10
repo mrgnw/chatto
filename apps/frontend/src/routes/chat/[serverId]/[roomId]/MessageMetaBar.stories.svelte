@@ -10,7 +10,7 @@
       docs: {
         description: {
           component:
-            'Message metadata row with thread controls, reaction pills, and capped reaction-user popovers.'
+            'Message metadata row with thread controls, reaction pills, and capped reaction-user popovers. Badges are 26 px high.'
         }
       }
     }
@@ -27,6 +27,14 @@
 
 <Story name="Replies and reactions" asChild>
   <MessageMetaBarStoryFrame variant="replies-and-reactions" />
+</Story>
+
+<Story name="Highlighted message" asChild>
+  <MessageMetaBarStoryFrame variant="replies-and-reactions" highlighted />
+</Story>
+
+<Story name="Highlight animation" asChild>
+  <MessageMetaBarStoryFrame variant="replies-and-reactions" animateHighlight />
 </Story>
 
 <Story name="Unread followed thread" asChild>

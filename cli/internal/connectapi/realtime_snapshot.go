@@ -11,12 +11,13 @@ import (
 	"sort"
 	"time"
 
+	"github.com/chattocorp/chatto/cli/internal/readmodel"
+
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/chattocorp/chatto/cli/internal/core"
 	apiv1 "github.com/chattocorp/chatto/cli/internal/pb/chatto/api/v1"
-	evtv1 "github.com/chattocorp/chatto/cli/internal/pb/chatto/core/evt/v1"
 )
 
 // realtimeSnapshotUserHydrationConcurrency bounds the concurrent key-store and
@@ -42,7 +43,7 @@ type realtimeSnapshotUserCapture struct {
 }
 
 type realtimeSnapshotCallCapture struct {
-	room     *evtv1.Room
+	room     *readmodel.Room
 	snapshot core.CallRoomSnapshot
 }
 
@@ -80,7 +81,7 @@ func (a *API) BuildRealtimeSnapshot(ctx context.Context, userID string) (*Realti
 		apiRooms := make([]*apiv1.RoomWithViewerState, 0, len(rooms))
 		referencedUserIDs := map[string]struct{}{userID: {}}
 		for _, room := range rooms {
-			apiRoom, err := a.realtimeSnapshotRoom(readCtx, userID, room)
+			apiRoom, err := a.apiRoomWithViewerState(readCtx, userID, room)
 			if err != nil {
 				return fmt.Errorf("assemble room %q: %w", room.Room.GetId(), err)
 			}
@@ -155,18 +156,6 @@ func (a *API) BuildRealtimeSnapshot(ctx context.Context, userID string) (*Realti
 		Users:       &apiv1.BatchGetUsersResponse{Users: users},
 		ActiveCalls: &apiv1.ListActiveCallsResponse{Calls: materializeRealtimeSnapshotCalls(capture.activeCalls, apiUsers)},
 	}, nil
-}
-
-func (a *API) realtimeSnapshotRoom(ctx context.Context, userID string, room *core.DirectoryRoom) (*apiv1.RoomWithViewerState, error) {
-	result := apiRoomWithViewerState(room)
-	if room == nil || room.Room == nil || core.KindOfRoom(room.Room) != core.KindDM || !room.ViewerState.IsMember {
-		return result, nil
-	}
-	exists := !room.LastRootMessageAt.IsZero()
-	result.HasMessageHistory = &exists
-	var err error
-	result.MemberUserIds, err = a.core.RoomMemberships().ListRoomMemberIDsForList(ctx, userID, room.Room.GetId())
-	return result, err
 }
 
 func (a *API) captureRealtimeSnapshotActiveCalls(ctx context.Context, userID string) ([]realtimeSnapshotCallCapture, error) {
@@ -264,6 +253,7 @@ func (a *API) realtimeSnapshotUser(ctx context.Context, content *core.HydratedUs
 		Login:          user.GetLogin(),
 		DisplayName:    user.GetDisplayName(),
 		Deleted:        user.GetDeleted(),
+		Deactivated:    user.GetDeactivated(),
 		PresenceStatus: apiv1.PresenceStatus_PRESENCE_STATUS_UNSPECIFIED,
 		CustomStatus:   coreCustomStatusToAPI(user.GetCustomStatus()),
 	}

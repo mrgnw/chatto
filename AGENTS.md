@@ -49,6 +49,8 @@ frontends use it. See ADR-111.
 - Add code documentation for public APIs and important fields, functions, types, invariants, and lifecycle behavior. Future maintainers must not have to infer this information from call sites.
 - Keep relevant tests and internal documentation current. Change public documentation only when readers must learn or do something differently. For API changes, document the required client migration; keep implementation details and unchanged behavior out. Apply the release-note scope below.
 - Run verification that can find regressions in the changed area.
+- Do not use `t.Parallel()`. Tests in each Go package run one at a time.
+  Let Go build and test different packages with its default concurrency.
 - Never claim full verification when only a partial signal was run.
 - Never silence lint, type, vet, or Svelte warnings as a routine fix. Fix the cause; discuss rare scoped exceptions before adding them.
 - Never log PII: no raw login names, display names, email addresses, submitted auth identifiers, OAuth/OIDC provider subjects, tokens, passwords, auth codes, reset links, raw IPs, or full query strings.
@@ -148,6 +150,10 @@ the Authling toolchain and workflow.
 For an ad-hoc tool command, use `mise x -- ...`. Do not assume that `go`,
 `pnpm`, `node`, or related binaries are on `PATH`.
 
+The project mise environment appends `-trimpath` to `GOFLAGS`, including for
+`mise x -- go test ...`. If a script replaces `GOFLAGS` after mise starts,
+include `-trimpath`. Do not set project flags with the user-wide `go env -w`.
+
 Turborepo runs the pnpm workspace tasks. Every workspace package must define a
 `check` script that type-checks all of its source, tests, and examples, so
 `mise check-workspace` (`pnpm run check`) checks the complete workspace. Turbo
@@ -201,10 +207,12 @@ Never leave a dev stack running in a detached or yielded terminal session.
   behavior, or development tools to it.
 - Update `docs/GLOSSARY.md` when introducing, renaming, or clarifying canonical
   vocabulary.
-- Public documentation requires a meaningful reader impact. Update
-  `apps/docs-website/` only when a change introduces a meaningful feature,
-  changes observable behavior, requires reader action, or makes existing public
-  documentation incorrect.
+- The public docs website serves self-hosted server operators first. Update
+  `apps/docs-website/` when installation, configuration, security, monitoring,
+  upgrades, troubleshooting, recovery, or a public integration contract changes
+  for its readers. Member controls and feature walkthroughs belong in in-app
+  help; until that help exists, keep feature behavior in the relevant FDR.
+  Follow the human-authored page restrictions in `apps/docs-website/AGENTS.md`.
 - Internal refactors, storage changes, implementation details, and added tests
   do not by themselves require public documentation updates. Record these in
   FDRs, ADRs, and architecture docs as applicable.
@@ -239,6 +247,19 @@ Never leave a dev stack running in a detached or yielded terminal session.
   AGPL-3.0-or-later unless the license boundary is deliberately changed.
 
 ## Issues, Commits, And PRs
+
+- Releasable packages use Sweet Release. Add a note with
+  `mise x -- sweet change <package-path>` for user-visible changes in each
+  affected release unit. Chatto, its client, frontend, and desktop share the
+  root note directory. See `CONTRIBUTING.md` and `docs/RELEASING.md`.
+  If a change amends an existing unreleased note in the same release unit,
+  you may update that note or combine the notes and remove duplicates. Describe the
+  final behavior and preserve required upgrade actions and the release type
+  needed for the combined change. Do not rewrite published release notes.
+
+- Do not hard-wrap Markdown prose in Sweet Release notes. Keep each paragraph
+  and each list item on one source line. Use line breaks only for Markdown
+  structure, such as separate paragraphs, list items, headings, and code blocks.
 
 - Every review that includes `apps/frontend/` must use
   [chatto-frontend-review](.agents/skills/chatto-frontend-review/SKILL.md).

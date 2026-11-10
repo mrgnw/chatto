@@ -6,6 +6,15 @@
       "confirmation": "See aktiveerib 15 minutiks sulle selles serveris määratud lisaõigused."
     },
     "notifications": {
+      "all_notifications": "Kõik teavitused",
+      "all_types": "Kõik tüübid",
+      "filter_status": "Olek",
+      "filter_type": "Tüüp",
+      "reactions": "Reaktsioonid",
+      "replies": "Vastused",
+      "mentions": "Mainimised",
+      "next_unread_source": "Minge järgmise lugemata allika juurde",
+      "no_unread": "Lugemata teavitusi pole",
       "title": "Märguanded",
       "subtitle": "Siin on, mis on uut",
       "clear_read": "Kustuta loetud",
@@ -29,12 +38,6 @@
         "room_invitation": "{actor} kutsus sind ruumi"
       }
     },
-    "sign_out": {
-      "title": "Logi välja",
-      "current_server": "Praegune server",
-      "all_servers": "Kõik serverid",
-      "description": "Logige välja ainult valitud serverist või katkestage kõigi serverite ühendus selle kliendiga."
-    },
     "overview": {
       "title": "Ülevaade"
     },
@@ -44,6 +47,7 @@
       "administration": "Serveri haldus"
     },
     "user_menu": {
+      "edit_profile": "Muuda profiili",
       "profile": "Kasutajaprofiil",
       "send_message": "Avage vestlus",
       "view_profile": "Vaata profiili",
@@ -57,6 +61,9 @@
       "details": "Serveri üksikasjad"
     },
     "compatibility": {
+      "older_frontend": "Teie rakendus ei toeta kõiki selle serveri funktsioone",
+      "frontend_upgrade": "Kasutate rakenduse versiooni {version}. Uuendage rakendust või paluge seda teha rakendust pakkuva serveri administraatoril. Juurdepääs funktsioonidele sõltub ka serveri seadetest ja teie õigustest.",
+      "frontend_requires": "Vajab rakenduse versiooni {version} või uuemat",
       "title": "Ühilduvus",
       "view": "Vaata ühilduvust",
       "limited": "Vanem serveri versioon",
@@ -172,12 +179,14 @@
       "members": "liikmed",
       "rooms": "Toad",
       "moderation": "Mõõdukus",
+      "roles": "Rollid",
       "permissions": "load",
       "security": "Turvalisus",
       "event_log": "Sündmuste logi",
       "system": "Süsteem",
       "back_to_server": "Tagasi serverisse",
-      "invitations": "Kutselingid"
+      "invites": "Kutsed",
+      "registration": "Registreerimine"
     }
   }
 }

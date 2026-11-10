@@ -1,5 +1,6 @@
 {
   "ui": {
+    "help": "Aiuto",
     "toggle_sidebar": "Attiva/disattiva la barra laterale",
     "notifications": "Notifiche",
     "open_quick_switcher": "Apri il cambio rapido",
@@ -7,7 +8,6 @@
     "realtime_paused": "Aggiornamenti in tempo reale sospesi. Riconnessione...",
     "update_available": "Una nuova versione è disponibile",
     "reload": "Ricarica",
-    "sign_out": "Esci",
     "close": "Chiudi",
     "auth_status": {
       "origin_title": "Sessione scaduta",
@@ -65,12 +65,14 @@
       "loading": "Caricamento..."
     },
     "image_modal": {
+      "open_larger": "Ingrandisci",
       "previous": "Immagine precedente",
       "next": "Immagine successiva",
       "fallback_alt": "Immagine",
       "zoom_in": "Ingrandisci",
       "zoom_out": "Riduci",
       "fit": "Adatta",
+      "pause_animation": "Metti in pausa l'animazione",
       "details": "Dettagli",
       "file_type": "Tipo di file"
     },

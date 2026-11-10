@@ -1,5 +1,6 @@
 {
   "ui": {
+    "help": "Hulp",
     "toggle_sidebar": "Zijbalk aan-/uitzetten",
     "notifications": "Meldingen",
     "open_quick_switcher": "Open snelwisselaar",
@@ -7,7 +8,6 @@
     "realtime_paused": "Realtime updates onderbroken. Opnieuw verbinding maken...",
     "update_available": "Er is een nieuwe versie beschikbaar",
     "reload": "Opnieuw laden",
-    "sign_out": "Meld u af",
     "close": "Sluiten",
     "auth_status": {
       "origin_title": "Sessie verlopen",
@@ -65,12 +65,14 @@
       "loading": "Laden..."
     },
     "image_modal": {
+      "open_larger": "Groter openen",
       "previous": "Vorige afbeelding",
       "next": "Volgende afbeelding",
       "fallback_alt": "Afbeelding",
       "zoom_in": "Inzoomen",
       "zoom_out": "Uitzoomen",
       "fit": "Passend maken",
+      "pause_animation": "Animatie pauzeren",
       "details": "Details",
       "file_type": "Bestandstype"
     },

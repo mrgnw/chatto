@@ -1,5 +1,6 @@
 {
   "ui": {
+    "help": "Nápověda",
     "toggle_sidebar": "Přepnout postranní panel",
     "notifications": "Oznámení",
     "open_quick_switcher": "Otevřete rychlý přepínač",
@@ -7,7 +8,6 @@
     "realtime_paused": "Aktualizace v reálném čase pozastaveny. Opětovné připojení...",
     "update_available": "K dispozici je nová verze",
     "reload": "Znovu načíst",
-    "sign_out": "Odhlaste se",
     "close": "Zavřít",
     "auth_status": {
       "origin_title": "Platnost relace vypršela",
@@ -65,12 +65,14 @@
       "loading": "Načítání..."
     },
     "image_modal": {
+      "open_larger": "Otevřít větší",
       "previous": "Předchozí obrázek",
       "next": "Další obrázek",
       "fallback_alt": "Obrázek",
       "zoom_in": "Přiblížit",
       "zoom_out": "Oddálit",
       "fit": "Přizpůsobit",
+      "pause_animation": "Pozastavit animaci",
       "details": "Podrobnosti",
       "file_type": "Typ souboru"
     },

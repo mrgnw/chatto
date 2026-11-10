@@ -6,6 +6,43 @@ import { mergeThreadContext, type ThreadContext } from './context-messages.ts';
 type Messages = ContextEvent['messages'];
 const user = (content: string): Messages[number] => ({ role: 'user', content, timestamp: 1 });
 
+test('keeps successive screenshots with their original message batches', () => {
+  const history = ['first', 'second'].map((id) =>
+    user(
+      JSON.stringify({
+        currentMessages: [{ id, text: id === 'first' ? "What's this?" : 'And this?' }]
+      })
+    )
+  );
+  const snapshot: ThreadContext = {
+    messages: [
+      { id: 'first', text: "What's this?" },
+      { id: 'second', text: 'And this?' }
+    ],
+    olderContextOmitted: false,
+    // Loading order prioritizes the newest image, not conversation order.
+    images: ['second', 'first'].map((id) => ({
+      messageId: id,
+      attachmentId: `${id}-attachment`,
+      data: `${id}-pixels`,
+      mimeType: 'image/png'
+    }))
+  };
+  const original = structuredClone({ history, snapshot });
+  const result = mergeThreadContext(history, snapshot);
+  expect(JSON.stringify(result[0])).toContain('first-pixels');
+  expect(JSON.stringify(result[0])).not.toContain('second-pixels');
+  expect(JSON.stringify(result[1])).toContain('second-pixels');
+  expect(JSON.stringify(result[1])).not.toContain('first-pixels');
+  expect({ history, snapshot }).toEqual(original);
+  expect(mergeThreadContext(history, snapshot)).toEqual(result);
+
+  // After compaction, recover the older image with an explicit context label.
+  const compacted = mergeThreadContext([history[1]!], snapshot);
+  expect(JSON.stringify(compacted)).toContain('first-pixels');
+  expect(JSON.stringify(compacted)).toContain('from additional thread context');
+});
+
 test('merges IDs and edits without mutating inputs or confusing identical human text', () => {
   const history: Messages = [
     user(
@@ -67,4 +104,19 @@ test('supplies messages absent from retained history after compaction', () => {
   const result = mergeThreadContext([user('Compacted summary'), user('Current request')], snapshot);
   expect(result[0]).toEqual(user('Compacted summary'));
   expect(JSON.stringify(result).match(/Recent fact/g)).toHaveLength(1);
+});
+
+test('keeps the current participant directory even when all messages are already represented', () => {
+  const history = [
+    user(JSON.stringify({ currentMessages: [{ id: 'one', author: 'human', text: 'Hello' }] }))
+  ];
+  const snapshot: ThreadContext = {
+    messages: [{ id: 'one', author: 'human', text: 'Hello' }],
+    olderContextOmitted: false,
+    participants: [{ id: 'human', username: 'cedar', displayName: 'Cedar' }]
+  };
+  const merged = JSON.stringify(mergeThreadContext(history, snapshot));
+  expect(merged).toContain('participants');
+  expect(merged).toContain('cedar');
+  expect(merged).toContain('Cedar');
 });

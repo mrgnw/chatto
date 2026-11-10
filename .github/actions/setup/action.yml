@@ -28,6 +28,11 @@ inputs:
 runs:
   using: 'composite'
   steps:
+    - name: Report disk use before setup
+      if: runner.os == 'Linux'
+      shell: bash
+      run: bash "$GITHUB_WORKSPACE/tools/ci-disk-usage.sh"
+
     - name: Cache Go modules
       if: inputs.install-cli-deps == 'true'
       uses: actions/cache@v5
@@ -106,10 +111,23 @@ runs:
           "${elevate[@]}" timeout 600s apt-get -o Acquire::Retries=2 -o Acquire::http::Timeout=20 -o Acquire::https::Timeout=20 install --no-install-recommends -y ffmpeg
         fi
 
+    - name: Report disk use after cache restoration
+      if: runner.os == 'Linux'
+      shell: bash
+      run: bash "$GITHUB_WORKSPACE/tools/ci-disk-usage.sh"
+
     - name: Set up CLI
       if: inputs.install-cli-deps == 'true'
       shell: bash
       run: mise setup-cli
+
+    - name: Download Go build and test dependencies
+      if: inputs.install-cli-deps == 'true'
+      shell: bash
+      working-directory: cli
+      # Fetch only imported packages. Listing dependencies does not compile or
+      # run tests, so a transport retry cannot hide a test failure.
+      run: node ../tools/ci-retry-download.mjs go list -deps -test -tags bootstrap,test_endpoints ./... > /dev/null
 
     - name: Set up Frontend
       if: inputs.install-frontend-deps == 'true'
@@ -121,8 +139,13 @@ runs:
     # system share build and check results, and GitHub removes entries that
     # are not used. See ADR-102.
     - name: Start Turbo remote cache
+      id: turbo-cache
       if: inputs.install-frontend-deps == 'true' && inputs.turbo-remote-cache == 'true'
+      # Cache availability must not prevent builds or tests from running.
+      continue-on-error: true
       uses: rharkor/caching-for-turbo@2238fae6eb9a9936f92356f54cb3660200d105e7 # v2.5.1
+      with:
+        server-port: '0'
 
     # Every run reads and writes entries, so the first job that builds a task
     # shares the result with the other jobs of the same run. Entries from a
@@ -130,4 +153,17 @@ runs:
     - name: Select Turbo cache sources
       if: inputs.install-frontend-deps == 'true' && inputs.turbo-remote-cache == 'true'
       shell: bash
-      run: echo "TURBO_CACHE=local:rw,remote:rw" >> "$GITHUB_ENV"
+      env:
+        TURBO_CACHE_OUTCOME: ${{ steps.turbo-cache.outcome }}
+      run: |
+        if [ "$TURBO_CACHE_OUTCOME" = success ]; then
+          echo "TURBO_CACHE=local:rw,remote:rw" >> "$GITHUB_ENV"
+        else
+          echo "::warning::Turbo remote cache did not start; using the local cache."
+          echo "TURBO_CACHE=local:rw" >> "$GITHUB_ENV"
+        fi
+
+    - name: Report disk use after setup
+      if: always() && runner.os == 'Linux'
+      shell: bash
+      run: bash "$GITHUB_WORKSPACE/tools/ci-disk-usage.sh"

@@ -1,4 +1,7 @@
 import MarkdownIt from 'markdown-it';
+import { parseArtifactFence, type ArtifactFence } from './artifactFence';
+import { MAX_SVG_SOURCE_LENGTH } from './svgPolicy';
+import { isMermaidSourceAllowed, MAX_MERMAID_PREVIEWS } from './mermaid/policy';
 import footnotePlugin from 'markdown-it-footnote';
 import type StateInline from 'markdown-it/lib/rules_inline/state_inline.mjs';
 import type StateCore from 'markdown-it/lib/rules_core/state_core.mjs';
@@ -8,6 +11,7 @@ import { configureMarkdownLinks } from './markdownLinks';
 import { renderedLinkTarget } from '$lib/navigation/renderedLink';
 import { collectMentionHandles, MENTIONS_ENV_KEY, mentionPlugin } from '$lib/markdownMentions';
 import { m } from '$lib/i18n/messages';
+import { emojiPlugin } from './markdownEmoji';
 
 type CodeHighlightingModule = typeof import('$lib/codeHighlighting');
 
@@ -29,7 +33,10 @@ const DISABLED_RULES = [
   'escape'
 ] as const;
 
-const ALPHANUMERIC = /[a-zA-Z0-9]/;
+// Combining marks belong to their word even when text is not NFC-normalized.
+const WORD_START = /^(?:\p{L}|\p{N}|\p{M})/u;
+const WORD_END = /(?:\p{L}|\p{N}|\p{M})$/u;
+const PARENTHESIZED_GLYPH = /^\([\p{L}\p{N}\p{S}]\p{M}*\)/u;
 const MAX_TABLE_COLUMNS = 64;
 const MAX_TABLE_ROWS = 256;
 const MAX_TABLE_CELLS = 4_096;
@@ -37,6 +44,9 @@ const MAX_TABLE_CELLS_PER_MESSAGE = 8_192;
 const tableCellCountKey = Symbol('tableCellCount');
 const ansiArtKey = Symbol('ansiArt');
 const MAX_ANSI_BLOCKS = 4;
+const svgPreviewCountKey = Symbol('svgPreviewCount');
+const MAX_SVG_PREVIEWS = 4;
+const mermaidPreviewCountKey = Symbol('mermaidPreviewCount');
 
 type MarkdownBlockRule = (
   state: StateBlock,
@@ -144,10 +154,9 @@ function boundedTableRule(tableRule: MarkdownBlockRule): MarkdownBlockRule {
 
 /**
  * Inline rule that consumes `*` or `_` marker runs as literal text when they
- * are not at a word boundary. A word boundary requires exactly one side of
- * the run to be alphanumeric. This neuters intraword emphasis like
- * `foo*bar*baz` and punctuation-flanked markers like `_(ツ)_`, while
- * preserving normal `*italic*`, `_italic_`, and `**bold**`.
+ * occur inside words or surround only punctuation. Unicode letters, numbers,
+ * and combining marks are word characters. Single-marker, parenthesized
+ * one-glyph faces stay literal by shape, not by the glyph's writing system.
  */
 function wordBoundaryEmphasis(state: StateInline, silent: boolean): boolean {
   const start = state.pos;
@@ -160,44 +169,55 @@ function wordBoundaryEmphasis(state: StateInline, silent: boolean): boolean {
   }
   const runLength = runEnd - start;
 
-  const before = start > 0 ? state.src[start - 1] : '';
-  const after = runEnd < state.src.length ? state.src[runEnd] : '';
-  const beforeAlnum = ALPHANUMERIC.test(before);
-  const afterAlnum = ALPHANUMERIC.test(after);
+  // Preserve faces such as _(ツ)_ and *(x)* without classifying their letters
+  // as punctuation. Longer parenthesized words remain eligible for emphasis.
+  if (runLength === 1 && state.src[runEnd] === '(') {
+    const face = PARENTHESIZED_GLYPH.exec(state.src.slice(runEnd, state.posMax));
+    const close = runEnd + (face?.[0].length ?? 0);
+    if (
+      face &&
+      close < state.posMax &&
+      state.src.charCodeAt(close) === marker &&
+      state.src.charCodeAt(close + 1) !== marker
+    ) {
+      if (!silent) state.pending += state.src.slice(start, close + 1);
+      state.pos = close + 1;
+      return true;
+    }
+  }
+
+  // Two UTF-16 code units include a complete adjacent supplementary character.
+  const beforeWord = WORD_END.test(state.src.slice(Math.max(0, start - 2), start));
+  const afterWord = WORD_START.test(state.src.slice(runEnd, runEnd + 2));
 
   // Single-marker intraword runs are definitely literal (`snake_case`,
   // `foo*bar*baz`). Double-marker runs are still allowed so bold can end next
   // to a following word (`**bold**text`).
-  const intraword = runLength === 1 && beforeAlnum && afterAlnum;
-  // Kaomoji-like: punctuation on both sides AND neither direction crosses an
-  // alphanumeric before hitting a same-marker run or the input boundary. The
-  // bidirectional check distinguishes a true kaomoji marker (e.g. the trailing
-  // `_` in `_(ツ)_/¯` — only punctuation back to the opener and only
-  // punctuation forward to end of input) from a closer of a real emphasis
-  // run that happens to be followed by punctuation/another emphasis (e.g.
-  // the closing `**` in `**foo:** **bar**` — alnum `o` is right behind it).
-  let kaomojiLike = false;
-  if (!beforeAlnum && !afterAlnum) {
+  const intraword = runLength === 1 && beforeWord && afterWord;
+  // Punctuation-only runs stay literal. Search both directions so a closing
+  // marker after punctuation in real text still works, as in **word:** **next**.
+  let punctuationOnly = false;
+  if (!beforeWord && !afterWord) {
     let forwardOK = true;
     for (let i = runEnd; i < state.posMax; i++) {
       if (state.src.charCodeAt(i) === marker) break;
-      if (ALPHANUMERIC.test(state.src[i])) {
+      if (WORD_START.test(state.src.slice(i, i + 2))) {
         forwardOK = false;
         break;
       }
     }
     if (forwardOK) {
-      kaomojiLike = true;
+      punctuationOnly = true;
       for (let i = start - 1; i >= 0; i--) {
         if (state.src.charCodeAt(i) === marker) break;
-        if (ALPHANUMERIC.test(state.src[i])) {
-          kaomojiLike = false;
+        if (WORD_START.test(state.src.slice(i, i + 2))) {
+          punctuationOnly = false;
           break;
         }
       }
     }
   }
-  if (intraword || kaomojiLike) {
+  if (intraword || punctuationOnly) {
     if (!silent) state.pending += state.src.slice(start, runEnd);
     state.pos = runEnd;
     return true;
@@ -318,14 +338,43 @@ function renderPlainCodeLines(code: string): string[] {
 
 function renderCodeCopyButton(): string {
   const label = escapeAttribute(m('common.copy_to_clipboard'));
-  return `<button type="button" class="markdown-code-copy mini-icon-action" data-markdown-copy aria-label="${label}" title="${label}"><span class="iconify icon-[uil--copy] text-sm" aria-hidden="true"></span></button>`;
+  return `<button type="button" class="markdown-code-copy copy-feedback mini-icon-action" data-markdown-copy aria-label="${label}" title="${label}"><span data-copy-icon class="iconify icon-[uil--copy] text-sm" aria-hidden="true"></span><span data-copy-check class="iconify icon-[uil--check] text-sm text-action" aria-hidden="true"></span></button>`;
 }
 
-function renderCodeActions(language?: string): string {
-  const label = language
-    ? `<span class="markdown-code-language">${escapeHtml(language)}</span>`
+type ArtifactPreview = {
+  available: boolean;
+  presentation: ArtifactFence['presentation'];
+  content?: string;
+};
+
+/** Visual-only frames retain raw source for rendering and failure recovery, without code UI. */
+function renderCodeFrame(code: string, language: string, artifact?: ArtifactPreview): string {
+  const visual = artifact?.available && artifact.presentation === 'visual';
+  const attributes = artifact
+    ? ` data-artifact="${language}" data-presentation="${visual ? 'visual' : 'code'}"`
     : '';
-  return `<span class="markdown-code-actions">${label}${renderCodeCopyButton()}</span>`;
+  const content = visual
+    ? `<div data-code-panel="render">${artifact.content ?? ''}</div>`
+    : renderCodeFrameContents(code, language, artifact);
+  return `<div class="markdown-code-frame"${attributes}${visual ? ` data-artifact-source="${escapeAttribute(code)}"` : ''}>${content}</div>\n`;
+}
+
+/** Source fallback markup for the audited MarkdownHtml sink, built only after a visual fails. */
+export function renderArtifactFallback(code: string, language: string): string {
+  return renderCodeFrameContents(code, language, { available: false, presentation: 'code' });
+}
+
+function renderCodeFrameContents(
+  code: string,
+  language: string,
+  artifact?: ArtifactPreview
+): string {
+  const sourceLabel = escapeAttribute(m('common.code_source'));
+  const renderLabel = escapeAttribute(m('common.code_render'));
+  const tabs = artifact
+    ? `<div role="tablist" aria-label="${escapeAttribute(language)}"><button type="button" role="tab" data-code-tab="source" aria-label="${sourceLabel}" title="${sourceLabel}" aria-selected="true" tabindex="0"><span class="iconify icon-[uil--brackets-curly] text-sm" aria-hidden="true"></span></button><button type="button" role="tab" data-code-tab="render" aria-label="${renderLabel}" title="${renderLabel}" aria-selected="false" tabindex="-1"${artifact.available ? '' : ' disabled'}><span class="iconify icon-[uil--eye] text-sm" aria-hidden="true"></span></button></div>`
+    : '';
+  return `<div class="markdown-code-header"><span class="markdown-code-language">${escapeHtml(language)}</span>${tabs}${renderCodeCopyButton()}</div><div data-code-panel="source">${renderCodeFence(code, language)}</div>${artifact ? `<div data-code-panel="render" hidden>${artifact.content ?? ''}</div><p class="markdown-code-error" role="status"${artifact.available ? ' hidden' : ''}>${escapeHtml(m('common.code_render_failed'))}</p>` : ''}`;
 }
 
 function renderCodeFence(code: string, rawLanguage: string): string {
@@ -350,10 +399,15 @@ function renderCodeFence(code: string, rawLanguage: string): string {
             ).children
           )
         : renderPlainCodeLines(displayCode);
-  const lineHtml = lines.map((line) => `<span class="line">${line}</span>`).join('');
+  const lineHtml = lines
+    .map(
+      (line, index) =>
+        `<span class="line"><span class="markdown-code-line-number" data-line="${index + 1}" aria-hidden="true"></span>${line}</span>`
+    )
+    .join('');
 
   // Copy the parser's code content before display-only newline and tab changes.
-  return `<pre class="hljs markdown-code" data-language="${escapeAttribute(displayLanguage)}" data-copy-source="${escapeAttribute(code)}"><code class="language-${escapeAttribute(displayLanguage)}" tabindex="0">${lineHtml}</code>${renderCodeActions(displayLanguage)}</pre>`;
+  return `<pre class="hljs markdown-code" data-language="${escapeAttribute(displayLanguage)}" data-copy-source="${escapeAttribute(code)}" style="--code-line-digits:${String(lines.length).length}"><code class="language-${escapeAttribute(displayLanguage)}" tabindex="0">${lineHtml}</code></pre>`;
 }
 
 function normalizeCodeLanguage(language: string | null | undefined): string {
@@ -440,8 +494,7 @@ function initialize(): void {
   md = new MarkdownIt({
     html: false, // Disable HTML tags in source
     linkify: true, // Auto-convert URLs to links
-    breaks: true, // Convert \n to <br>
-    highlight: renderCodeFence
+    breaks: true // Convert \n to <br>
   });
 
   configureMarkdownLinks(md);
@@ -497,12 +550,35 @@ function initialize(): void {
   // Recognize @mentions in the token tree after linkify, so URLs, links,
   // code, and blockquotes keep their text. See `$lib/markdownMentions`.
   md.use(mentionPlugin);
-  const defaultFence = md.renderer.rules.fence!;
-  md.renderer.rules.fence = (tokens, index, options, env, self) => {
+  md.use(emojiPlugin);
+  md.renderer.rules.fence = (tokens, index, _options, env) => {
     const token = tokens[index];
+    const hint = parseArtifactFence(token.info);
+    const language = normalizeCodeLanguage(token.info);
+    if (!hint) return renderCodeFrame(token.content, language);
+    const { presentation } = hint;
+    if (language === 'mermaid') {
+      const count = (env[mermaidPreviewCountKey] as number | undefined) ?? 0;
+      const available = count < MAX_MERMAID_PREVIEWS && isMermaidSourceAllowed(token.content);
+      if (available) env[mermaidPreviewCountKey] = count + 1;
+      return renderCodeFrame(token.content, language, { available, presentation });
+    }
+    // SVG stays an image resource, never inline HTML, an object, or an iframe.
+    if (language === 'svg') {
+      const count = (env[svgPreviewCountKey] as number | undefined) ?? 0;
+      const available = count < MAX_SVG_PREVIEWS && token.content.length <= MAX_SVG_SOURCE_LENGTH;
+      if (available) env[svgPreviewCountKey] = count + 1;
+      return renderCodeFrame(token.content, language, { available, presentation });
+    }
     const art: string | undefined = env[ansiArtKey]?.get(token);
-    if (art === undefined) return defaultFence(tokens, index, options, env, self);
-    return `<pre class="markdown-code markdown-ansi" data-copy-source="${escapeAttribute(token.content)}"><code tabindex="0">${art}</code>${renderCodeActions('ansi')}</pre>\n`;
+    return renderCodeFrame(token.content, language, {
+      available: art !== undefined,
+      presentation,
+      content:
+        art === undefined
+          ? ''
+          : `<pre class="markdown-code markdown-ansi"><code tabindex="0">${art}</code></pre>`
+    });
   };
   md.renderer.rules.softbreak = renderChatLineBreak;
   md.renderer.rules.hardbreak = renderChatLineBreak;
@@ -515,7 +591,7 @@ function initialize(): void {
   md.renderer.rules.paragraph_close = renderParagraphClose;
   md.renderer.rules.code_block = (tokens, idx) => {
     const code = tokens[idx].content;
-    return `<pre class="markdown-code" data-copy-source="${escapeAttribute(code)}"><code tabindex="0">${escapeHtml(code)}</code>${renderCodeActions()}</pre>\n`;
+    return renderCodeFrame(code, 'text');
   };
 
   // Customize link rendering for security
@@ -533,6 +609,9 @@ function initialize(): void {
       if (!/^mailto:/i.test(href)) {
         const target = renderedLinkTarget(href);
         token.attrSet('data-content-href', href);
+        if (token.markup === 'linkify' || token.markup === 'autolink') {
+          token.attrSet('data-entity-autolink', '');
+        }
         token.attrSet('href', target.href);
         if (target.target) token.attrSet('target', target.target);
         if (target.rel) token.attrSet('rel', target.rel);
@@ -592,7 +671,7 @@ export async function renderMarkdown(
     // Work from parsed fences so quoted/list blocks work and inline examples do
     // not load the terminal parser. Keep the results local to this render call.
     const fences = tokens.filter(
-      (token) => token.type === 'fence' && normalizeCodeLanguage(token.info) === 'ansi'
+      (token) => token.type === 'fence' && parseArtifactFence(token.info)?.language === 'ansi'
     );
     if (fences.length) {
       const { renderAnsiArt, MAX_SOURCE_LENGTH } = await import('$lib/ansiArt');

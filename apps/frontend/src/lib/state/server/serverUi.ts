@@ -14,6 +14,7 @@
  */
 
 import { createAdminRoomLayoutAPI } from '$lib/api/adminRoomLayout';
+import { roomNoticeDismissalKey, writeNoticeDismissal } from '$lib/storage/roomNoticeDismissal';
 import { createMemberDirectoryAPI } from '@chatto/client/api/memberDirectory';
 import { createMessageSearchAPI, type MessageSearchAPI } from '@chatto/client/api/messageSearch';
 import { createRoomCommandAPI } from '@chatto/client/api/rooms';
@@ -140,6 +141,9 @@ export class ServerUi {
       this.#forEachSearch((search) => search.clearResults());
     });
     store.onRoomAccessLost(({ roomId, messagesOnly, removed }) => {
+      if (!messagesOnly && store.viewerId) {
+        writeNoticeDismissal(roomNoticeDismissalKey(store.serverId, store.viewerId, roomId), '');
+      }
       this.draftReplies.clearRoom(roomId);
       const highlight = this.pendingHighlights.current;
       if (highlight?.roomId === roomId) this.pendingHighlights.complete(highlight);
@@ -155,7 +159,10 @@ export class ServerUi {
       this.draftReplies.clear();
       this.#forEachSearch((search) => search.invalidateAuthor(userId));
     });
-    store.onSessionEnded(() => this.draftReplies.clear());
+    store.onSessionEnded(() => {
+      this.draftReplies.clear();
+      this.messageSearch.availability.reset();
+    });
     store.onPermissionsChanged(() => {
       // Search holds plaintext outside the projection: fence it at once.
       this.#forEachSearch((search) => search.refreshPermissions());
@@ -199,6 +206,7 @@ export class ServerUi {
       this.#adminRoomLayoutSubscriptions = 0;
       this.pendingHighlights.clear();
       this.#forEachSearch((search) => search.reset());
+      this.messageSearch.availability.reset();
       this.#roomSearches.clear();
     });
   }
@@ -222,7 +230,11 @@ export class ServerUi {
       // store cannot be a replacement that a later call creates for that room.
       queueMicrotask(() => evicted.reset());
     }
-    const search = new MessageSearchStore(this.#searchAPI, () => this.#store.isAuthenticated);
+    const search = new MessageSearchStore(
+      this.#searchAPI,
+      () => this.#store.isAuthenticated,
+      this.messageSearch.availability
+    );
     this.#roomSearches.set(roomId, search);
     return search;
   }

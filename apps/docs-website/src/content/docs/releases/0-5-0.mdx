@@ -1,6 +1,6 @@
 ---
-title: Chatto 0.5.0 (unreleased)
-description: Unreleased release notes for Chatto 0.5.0.
+title: Chatto 0.5.0
+description: Chatto 0.5.0 features, fixes, and upgrade steps from 0.4.26.
 ---
 
 import ReleaseFeatureCard from "../../../components/release-notes/ReleaseFeatureCard.astro";
@@ -9,104 +9,88 @@ import ReleaseHero from "../../../components/release-notes/ReleaseHero.astro";
 
 <ReleaseHero
   version="0.5.0"
-  status="Unreleased"
-  summary="0.5.0 adds bots and webhooks, server-wide search, persistent notifications, a new composer, and privileged mode for administrators. Read the upgrade notes before you upgrade: some permissions need review."
+  summary="0.5.0 adds bots and webhooks, server-wide search, persistent notifications, a new composer, and desktop apps. Read the upgrade notes before you upgrade: review permissions, update configuration, and plan downtime."
 />
 
 ## Using Chatto
 
 <ReleaseFeatureGrid>
   <ReleaseFeatureCard title="Bots" size="large">
+    The rise of the machines is finally upon us!
     Create [bot accounts](/guides/integrations/bot-accounts/) that post, reply, and react through the same API as
-    members. Each bot has an owner, its own permissions, and up to 20 named API
-    keys. A bot never gets more access than its owner.
+    members: ConnectRPC, realtime websocket protocol, inbound and outbound webhooks, and even a built-in MCP server make it easy to supercharge your
+    Chatto server with integrations, chatbots, and more, while keeping things transparent and safe for your human users.
   </ReleaseFeatureCard>
 
-  <ReleaseFeatureCard title="Search across your server" size="large">
-    [Find messages](/guides/operations/search/) in every room you can read, including threads and direct
-    messages. Filter by room, author, date, or attachments. Type `?` in the
-    Cmd-K finder to search all your servers at once.
+  <ReleaseFeatureCard title="Search" size="large">
+    Find that old conversation from last year/month/week! Chatto now ships [with search built-in](/guides/operations/search/).
+    Find stuff within a single room, a server, or even across all your connected servers.
   </ReleaseFeatureCard>
 
-  <ReleaseFeatureCard title="Notifications that stay" size="large">
-    Notifications now stay in one list after you read them, until you delete
-    them. [Choose how each kind of activity reaches you](/guides/operations/notifications-web-push/#notification-policy),
-    per server, room group, or room.
+  <ReleaseFeatureCard title="Chatto Desktop" size="large">
+    We now have a [desktop app](/getting-started/faq/#is-there-a-desktop-app-are-there-mobile-apps)!
+    It's available for macOS, Windows, and Linux, and features auto-updates, native notifications and
+    screen sharing on all platforms.
   </ReleaseFeatureCard>
 
-  <ReleaseFeatureCard title="A new composer" size="large">
-    Write in Markdown or in the new [Visual editor](/getting-started/message-formatting/), with a formatting toolbar and
-    keyboard shortcuts. Insert timestamps that every reader sees in their own
-    time zone, and write tables.
+  <ReleaseFeatureCard title="Notifications 2.0" size="large">
+    An all-new notifications feed that shows you everything that's happened until you dismiss it,
+    with an equally [all-new configuration matrix](/guides/operations/notifications-web-push/#notification-policy) that lets you choose just how much Chatto can bug you when someone posts in _that one_ channel.
   </ReleaseFeatureCard>
 
-  <ReleaseFeatureCard title="Threads your way">
-    Room managers can [make threads required, encouraged, enabled, or disabled](/guides/operations/community-structure/#threading-mode)
-    for each room. [Threads](/getting-started/threads/) becomes an inbox that shows the latest reply of
-    each conversation you follow.
+  <ReleaseFeatureCard title="Markown? WYSIWYG? Why not both?" size="large">
+    Chatto now ships with not just one, [but _two_ composers](/getting-started/message-formatting/); the Visual Composer gives you the same WYSIWYG
+    editing experience you know from previous versions, but the new Markdown Composer gives you the true
+    Markdown source editing experience with some extra syntax highlighting niceties on top.
+    Both editors feature a useful formatting toolbar, and we've also added support for Markdown tables and footnotes.
   </ReleaseFeatureCard>
 
-  <ReleaseFeatureCard title="Better rooms">
-    Preview a room before you join it. Room names can now contain spaces,
-    emoji, and any writing system. Room managers can turn on
-    [slow mode](/guides/operations/community-structure/#slow-mode).
+  <ReleaseFeatureCard title="Threads à la mode">
+    Some rooms are better with threads, others... maybe not. Rooms can now be configured for [one of four
+    different threading modes](/guides/operations/community-structure/#threading-mode), ranging from "we don't have threads in this house" to "threads everywhere or else".
   </ReleaseFeatureCard>
 
   <ReleaseFeatureCard title="Room invitations">
-    [Invite server members to a room](/guides/operations/permissions/#room-invitations),
-    even if they cannot join it on their own. Invited members see the room in
-    their sidebar, receive a notification according to their settings, and have
-    seven days to accept or decline.
+    That one private room not everyone is supposed to freely join? You can now lock it down and
+    [manually invite users to it](/guides/operations/permissions/#room-invitations). You're welcome.
   </ReleaseFeatureCard>
 
-  <ReleaseFeatureCard title="A new attachment viewer">
-    [Zoom into images](/getting-started/message-formatting/#view-attachments), browse the images of a message as a gallery, and add
-    descriptions that screen readers use. Uploads show their progress, and a
-    failed upload stays in the composer so you can try again.
+  <ReleaseFeatureCard title="Upgraded attachments">
+    Chatto 0.5 features an all-new attachment upload UI that will show you upload progress as it goes.
+    Isn't technology incredible?
+    To top it off, it also ships with an all new attachment viewer that lets you zoom and pan around images and
+    will even render HTML attachments (yes, h4x0rs, it's sandboxed.)
   </ReleaseFeatureCard>
 
   <ReleaseFeatureCard title="Clearer calls">
-    [Voice boosting and an optional noise gate](/guides/infrastructure/voice-calls/#device-preferences-and-microphone-test) make voices easier to hear. Set
-    the volume of each participant, and see a warning when a connection is
-    poor. Chatto remembers your devices.
+    [Voice boosting, an optional noise gate, and per-participant volume](/guides/infrastructure/voice-calls/#device-preferences-and-microphone-test)
+    make voices easier to hear. Calls now also auto-highlight the current speaker and let you manually pin a video tile if that's what you prefer.
   </ReleaseFeatureCard>
 
-  <ReleaseFeatureCard title="Profiles with a bio">
-    Add a [Markdown bio](/getting-started/message-formatting/#profile-bios) to your profile and share your local time if you want.
-    Your time zone stays private until you share it.
+  <ReleaseFeatureCard title="Diagrams, ANSI, SVG, oh my!">
+    You can now embed [Mermaid diagrams](/getting-started/message-formatting/#mermaid-diagrams),
+    SVG images, and even ANSI art in code blocks.
   </ReleaseFeatureCard>
 
-  <ReleaseFeatureCard title="22 languages">
-    Chatto is now available in 22 languages with 30 regional variants, including Greek.
+  <ReleaseFeatureCard title="Languages!">
+    Chatto is now available in 22 languages. More will be added over time.
   </ReleaseFeatureCard>
 
-  <ReleaseFeatureCard title="Make Chatto look your way">
-    Choose an [accent color, a flat or 3D style](/getting-started/appearance/), and a contrast level from soft
-    to pure black and white.
+  <ReleaseFeatureCard title="UI Customization">
+    Choose an accent color, a flat or 3D style, and a contrast level from soft
+    to pure black and white. Make the entire damn thing look the way that feels good to you. It's fine.
   </ReleaseFeatureCard>
 
-  <ReleaseFeatureCard title="Pinned messages" size="small">
-    Members with `message.pin` can [pin important messages](/guides/operations/community-structure/#pinned-messages). Pins appear in the room sidebar.
-  </ReleaseFeatureCard>
-
-  <ReleaseFeatureCard title="Bluesky and Mastodon previews" size="small">
-    Social posts show as native cards with images, quoted posts, and hidden
-    content warnings.
-  </ReleaseFeatureCard>
-
-  <ReleaseFeatureCard title="See who reacted" size="small">
-    Open the reactions of a message to see who used each emoji.
-  </ReleaseFeatureCard>
-
-  <ReleaseFeatureCard title="Presence you control" size="small">
-    Chatto no longer sets you to Away automatically. Your status applies to all
-    your devices on a server.
+  <ReleaseFeatureCard title="Room information, notices, and pinned messages" size="small">
+    On top of giving a room a description, you can now also publish room notices and pin messages for every memember to see.
   </ReleaseFeatureCard>
 </ReleaseFeatureGrid>
 
 ### Other noteworthy changes
 
 - Start a thread together with its first message with **Post as thread**.
+- Type `#` to find and link a room. Use the emoji picker or shortcodes to add
+  emoji, including skin-tone variants.
 - Show a thread beside the room, in a pane that you
   can resize.
 - The message menu can copy the text, a link, an image,
@@ -121,15 +105,19 @@ import ReleaseHero from "../../../components/release-notes/ReleaseHero.astro";
 - When the server processes videos, you can seek in new
   videos.
 - The room timeline shows when a call starts and
-  ends. The screen stays awake during a call.
+  ends. The screen stays awake during a call, and system media controls can
+  mute your microphone or end the call.
+- Room notices can stay in the room header or also appear as an announcement
+  in the timeline.
+- Vimeo links can play inline after you select **Show video**.
 - Push notifications now work for remote servers, too.
 - Send yourself a test push notification from
   notification settings.
 - Unjoined rooms in a room group collapse into one row.
   Rooms, room groups, and servers have context menus.
 - Bots have a **BOT** badge beside their name.
-- The installed app shows your recent chats before it
-  reconnects to the server.
+- Reorder servers in the sidebar, and open keyboard shortcut help with
+  **Cmd/Ctrl+Shift+K**.
 
 ### Fixes
 
@@ -139,7 +127,6 @@ import ReleaseHero from "../../../components/release-notes/ReleaseHero.astro";
   message.
 - An edit that happens at the same time as a deletion cannot restore the
   deleted message.
-- Audio, GIFs, and videos continue to play when reactions change.
 - Images and videos fit inside narrow messages.
 - The Files panel loads only when you open it.
 - Members with `message.manage` can edit their own messages after the edit
@@ -169,20 +156,10 @@ import ReleaseHero from "../../../components/release-notes/ReleaseHero.astro";
     login.
   </ReleaseFeatureCard>
 
-  <ReleaseFeatureCard title="Invite links">
-    Create single-use or reusable [invite links](/guides/operations/identity-login/#invite-only-account-creation) with an expiry date. Set account
-    creation to invite-only to admit new members only through these links.
-  </ReleaseFeatureCard>
-
-  <ReleaseFeatureCard title="Room management where the room is">
-    Room settings open from the room itself. Give a member `room.manage` for one
-    room or room group, without access to server administration.
-  </ReleaseFeatureCard>
-
-  <ReleaseFeatureCard title="More precise permissions">
-    [New permissions](/guides/operations/permissions/) control reading messages, calls, and direct messages
-    separately. Moderators can remove a member from a room, with an optional
-    suspension.
+  <ReleaseFeatureCard title="Invitation codes">
+    Want to control who's joining your server? Set the whole thing to invite only and hand
+    out invite codes to the people who you actually want on there. Invite codes will work
+    with any registration method (email/password, SSO, ...) you've configured.
   </ReleaseFeatureCard>
 
   <ReleaseFeatureCard title="More ways to sign in">
@@ -191,19 +168,15 @@ import ReleaseHero from "../../../components/release-notes/ReleaseHero.astro";
     for SSO-only servers, and [send email through JMAP](/guides/operations/identity-login/#transactional-email).
   </ReleaseFeatureCard>
 
-  <ReleaseFeatureCard title="Connect from any Chatto client">
-    [Clients on other origins](/guides/operations/identity-login/#clients-from-other-origins) connect without allowlists. Members approve each
-    client, and administrators can trust or block it.
+  <ReleaseFeatureCard title="Manage access through SSO">
+    [Restrict OIDC sign-in by group and map groups to Chatto roles](/guides/integrations/external-login-providers/#restrict-who-can-sign-in).
+    Login providers can also manage usernames and prevent members from
+    disconnecting their account link.
   </ReleaseFeatureCard>
 
   <ReleaseFeatureCard title="Neighbors">
     [Recommend other Chatto servers](/guides/operations/community-structure/#neighbors) in a public directory. Members find them in
-    the Server Directory. This feature is experimental.
-  </ReleaseFeatureCard>
-
-  <ReleaseFeatureCard title="Operator CLI for rooms and messages">
-    Create and list rooms, add members, upload attachments, and import
-    historical messages with the [operator CLI](/guides/operations/operator-cli/).
+    the Server Directory.
   </ReleaseFeatureCard>
 
   <ReleaseFeatureCard title="Faster restarts, less memory">
@@ -211,9 +184,9 @@ import ReleaseHero from "../../../components/release-notes/ReleaseHero.astro";
     encrypted snapshots shorten restarts further.
   </ReleaseFeatureCard>
 
-  <ReleaseFeatureCard title="Delete member accounts" size="small">
-    Administrators can delete another member's account from member
-    administration.
+  <ReleaseFeatureCard title="Deactivate or delete accounts" size="small">
+    Administrators can [deactivate an account](/guides/operations/identity-login/#deactivate-an-account)
+    to stop access and keep its data, reactivate it, or delete it.
   </ReleaseFeatureCard>
 
   <ReleaseFeatureCard title="Community badges" size="small">
@@ -225,7 +198,11 @@ import ReleaseHero from "../../../components/release-notes/ReleaseHero.astro";
 ### Other noteworthy changes
 
 - Server diagnostics show the health of background workers
-  and asset cleanup.
+  and asset cleanup, with LiveKit setup diagnostics for calls.
+- Use `chatto init` for guided configuration, and `chatto config check` to find
+  unknown or deprecated settings before deployment.
+- HEIC uploads receive image previews that other members can view in their
+  browser.
 - Back up and restore a Docker Compose installation
   with `docker compose run`. See
   [Backup and restore](/guides/operations/backup-restore/).
@@ -242,9 +219,9 @@ import ReleaseHero from "../../../components/release-notes/ReleaseHero.astro";
 
 - A server process recovers by itself after a short NATS outage.
 - Chatto sends Web Push requests only to public HTTPS addresses.
+- Link previews reject non-public network destinations. Preview logs no longer
+  contain sensitive URL data.
 - The event log no longer contains password data.
-- Administrators can rename their own account and reset their own username
-  cooldown.
 - Permission changes show a pending state.
 - The server description limit applies before you save.
 - The Docker Compose setup restarts services after a failure and uses real
@@ -266,6 +243,12 @@ import ReleaseHero from "../../../components/release-notes/ReleaseHero.astro";
     mentions a bot or sends it a direct message.
   </ReleaseFeatureCard>
 
+  <ReleaseFeatureCard title="A TypeScript client for integrations" size="large">
+    Use [`@chatto/client`](https://github.com/chattocorp/chatto/blob/main/packages/chatto-client/README.md)
+    for requests, live state, reconnects, and bot message handling. The npm
+    package has no required UI framework and includes TypeScript declarations.
+  </ReleaseFeatureCard>
+
   <ReleaseFeatureCard title="Realtime protocol 4">
     The [realtime connection](/guides/integrations/realtime-protocol/) starts from an exact snapshot, sends semantic
     events, and resumes after a short disconnection without a full reload.
@@ -282,6 +265,8 @@ import ReleaseHero from "../../../components/release-notes/ReleaseHero.astro";
 
 - Transfer a bot to a new owner. Its permissions
   and API keys stay.
+- Bots can start direct messages and perform administrative operations when
+  their explicit permissions and their owner's permissions allow them.
 - Chatto keeps outbound webhook delivery logs for 7
   days.
 - Native apps and command-line tools can receive
@@ -295,6 +280,8 @@ import ReleaseHero from "../../../components/release-notes/ReleaseHero.astro";
 ## Upgrade Notes
 
 ### Review your permissions before you upgrade
+
+These notes cover the upgrade from **0.4.26**, the last stable 0.4 release.
 
 Version 0.5 adds new permissions. When a 0.4 server starts with 0.5 for the
 first time, Chatto adds these grants one time, so that existing access does not
@@ -312,15 +299,16 @@ does not return.
 
 Do these steps on every upgraded server:
 
-- **Grant `user.invite` and `bot.manage`** to the admin role if administrators
-  must manage invite links and bots.
+- **Grant `user.manage-invites` and `bot.manage`** to the admin role if
+  administrators must manage all invitation codes and bots. Grant `user.invite`
+  to members who need to create and manage their own codes.
 - **Grant `bot.create`** to the roles that can create bots. A new server grants
   it only to `admin`.
 - **Grant `room.manage`** to delegated room managers. Room group management
   used `role.manage` in 0.4.
-- **Allow `message.post` for `admin` in the `announcements` room** if
-  administrators must post there. A new server has this grant, but an upgraded
-  server does not.
+- **Allow `message.post` for `admin` and `owner` in the `announcements` room**
+  if they must post there without privileged mode. A new server has these
+  grants, but an upgraded server keeps its current settings.
 - **Check thread posting.** `message.post` now also allows thread replies. A
   0.4 setup that allowed `message.post` and denied `message.post-in-thread` now
   allows replies.
@@ -330,9 +318,9 @@ Do these steps on every upgraded server:
 Administrators, moderators, and the owner must now enable privileged mode before
 they use their administrative permissions. This also applies to custom
 `room.create` grants. Owners also need privileged mode to see, join, or read
-rooms that deny these actions to `everyone`, and to post in the announcements
-room. Give an owner the `admin` role or a room-level allow if they need this
-access during normal use.
+rooms that deny these actions to `everyone` when no explicit grant allows
+access. Give the `owner` role a room-level allow if owners need this access
+during normal use.
 
 See [Permissions](/guides/operations/permissions/) for the complete list.
 
@@ -343,7 +331,8 @@ See [Permissions](/guides/operations/permissions/) for the complete list.
 - Stop every 0.4 server process and worker before you start 0.5. Do not use a
   rolling update. Upgrade the bundled client at the same time.
 - You cannot go back to 0.4 after a 0.5 server accepts traffic. To roll back,
-  restore the backup. Writes after the backup are lost.
+  restore the backup. Writes after the backup are lost. See
+  [Backup and restore](/guides/operations/backup-restore/).
 
 ### Configuration
 
@@ -354,6 +343,14 @@ See [Permissions](/guides/operations/permissions/) for the complete list.
   `asset_processing.enabled = true`, or new videos stay in processing. Chatto
   ignores the old keys without an error. New videos use HLS; existing MP4 videos
   continue to play. See [Video processing](/guides/infrastructure/media-attachments/#video-processing).
+- **Set one upload-size limit.** Use `core.assets.max_upload_size` for all
+  attachments, including GIFs and videos. Remove `video.max_upload_size`; until
+  you do, the larger limit applies to all files. The default is now 25 MB for
+  every file. Set `100MB` explicitly if you need to keep the old default video
+  allowance. See [Upload limits](/guides/infrastructure/media-attachments/#what-members-can-upload).
+- Remove `[core.assets.cache]`, `CHATTO_CORE_ASSETS_CACHE_ENABLED`, and
+  `CHATTO_CORE_ASSETS_CACHE_TTL`. The asset cache is always enabled and keeps
+  entries for seven days. See [Asset cache upgrades](/guides/infrastructure/media-attachments/#asset-cache-upgrades).
 - Remove `webserver.oauth_redirect_origins`. Clients on other origins no longer
   need configuration. Use `webserver.allowed_origins` only for additional
   origins of the bundled client behind your reverse proxy. Chatto does not
@@ -375,6 +372,8 @@ See [Permissions](/guides/operations/permissions/) for the complete list.
 - Members stay signed in to the bundled client. Members of other servers in the
   multi-server client, and OAuth clients, sign in again once.
 - The 0.5 client does not connect to 0.4 servers.
+- New direct message conversations support two people. Existing group direct
+  messages remain accessible; use a channel room for new group conversations.
 
 ### Custom clients and bots
 

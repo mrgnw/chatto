@@ -29,7 +29,7 @@ function renderAutocomplete(props: {
   members: RoomMember[];
   roles?: { name: string; isSystem?: boolean; position?: number; pingable?: boolean }[];
   prioritizedUserIds?: ReadonlySet<string>;
-  onSelect?: (login: string, viaTab: boolean) => void;
+  onSelect?: (login: string, key: string) => void;
   onClose?: () => void;
 }) {
   return render(MentionAutocomplete, {
@@ -106,10 +106,10 @@ describe('MentionAutocomplete', () => {
       expect(container.querySelector('[data-testid="mention-autocomplete"]')).toBeNull();
     });
 
-    it('limits results to the top 10', () => {
+    it('includes every fuzzy match beyond the first ten results', () => {
       const members = Array.from({ length: 20 }, (_, i) => member('user' + i, 'User ' + i));
-      const { container } = renderAutocomplete({ query: 'user', members });
-      expect(visibleLogins(container).length).toBe(10);
+      const { container } = renderAutocomplete({ query: 'usr', members });
+      expect(visibleLogins(container)).toHaveLength(20);
     });
 
     it('orders results by descending fuzzy score (exact match first)', () => {
@@ -188,18 +188,18 @@ describe('MentionAutocomplete', () => {
       expect(component.handleKeyDown(ev)).toBe(false);
     });
 
-    it('Tab triggers onSelect with viaTab=true', () => {
+    it('Tab forwards the selection key', () => {
       const onSelect = vi.fn();
       const { component } = renderAutocomplete({
-        query: 'al',
+        query: 'alice',
         members: [member('alice')],
         onSelect
       });
       component.handleKeyDown(new KeyboardEvent('keydown', { key: 'Tab', cancelable: true }));
-      expect(onSelect).toHaveBeenCalledWith('alice', true);
+      expect(onSelect).toHaveBeenCalledWith('alice', 'Tab');
     });
 
-    it('Enter selects the highlighted mention with viaTab=false', () => {
+    it('Enter forwards the selection key', () => {
       const onSelect = vi.fn();
       const { component } = renderAutocomplete({
         query: 'al',
@@ -210,7 +210,7 @@ describe('MentionAutocomplete', () => {
       const handled = component.handleKeyDown(ev);
       expect(handled).toBe(true);
       expect(ev.defaultPrevented).toBe(true);
-      expect(onSelect).toHaveBeenCalledWith('alice', false);
+      expect(onSelect).toHaveBeenCalledWith('alice', 'Enter');
     });
 
     it('Escape calls onClose', () => {
@@ -226,7 +226,7 @@ describe('MentionAutocomplete', () => {
   });
 
   describe('selection', () => {
-    it('clicking a result calls onSelect with viaTab=false', () => {
+    it('clicking a result forwards the click selection', () => {
       const onSelect = vi.fn();
       const { container } = renderAutocomplete({
         query: 'al',
@@ -235,10 +235,10 @@ describe('MentionAutocomplete', () => {
       });
       const buttons = container.querySelectorAll('button');
       (buttons[0] as HTMLButtonElement).click();
-      // Click sends the literal 'click' key, which !== 'Tab' → viaTab=false
+      // Pointer selection keeps its own insertion policy.
       expect(onSelect).toHaveBeenCalledTimes(1);
-      const [, viaTab] = onSelect.mock.calls[0];
-      expect(viaTab).toBe(false);
+      const [, key] = onSelect.mock.calls[0];
+      expect(key).toBe('click');
     });
   });
 });

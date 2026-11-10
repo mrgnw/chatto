@@ -6,6 +6,15 @@
       "confirmation": "למשך 15 דקות, פעולה זו מפעילה את ההרשאות הנוספות שהוקצו לך בשרת זה."
     },
     "notifications": {
+      "all_notifications": "כל ההתראות",
+      "all_types": "כל הסוגים",
+      "filter_status": "מצב",
+      "filter_type": "סוג",
+      "reactions": "תגובות רגש",
+      "replies": "תשובות",
+      "mentions": "אזכורים",
+      "next_unread_source": "עבור למקור הבא שלא נקרא",
+      "no_unread": "אין התראות שלא נקראו",
       "title": "התראות",
       "subtitle": "הנה מה חדש",
       "clear_read": "מחיקת הודעות שנקראו",
@@ -29,12 +38,6 @@
         "room_invitation": "{actor} הזמין אותך לחדר"
       }
     },
-    "sign_out": {
-      "title": "צא",
-      "current_server": "שרת נוכחי",
-      "all_servers": "כל השרתים",
-      "description": "צא רק מהשרת שנבחר, או נתק את כל השרתים מהלקוח הזה."
-    },
     "overview": {
       "title": "סקירה כללית"
     },
@@ -44,6 +47,7 @@
       "administration": "ניהול שרת"
     },
     "user_menu": {
+      "edit_profile": "ערוך פרופיל",
       "profile": "פרופיל משתמש",
       "send_message": "פתח שיחה",
       "view_profile": "הצגת פרופיל",
@@ -57,6 +61,9 @@
       "details": "פרטי השרת"
     },
     "compatibility": {
+      "older_frontend": "האפליקציה שלך לא תומכת בכל התכונות בשרת הזה",
+      "frontend_upgrade": "אתה משתמש בגרסה {version} של האפליקציה. עדכן את האפליקציה או בקש ממנהל השרת שמספק אותה לעדכן אותה. הגישה לתכונות תלויה גם בהגדרות השרת ובהרשאות שלך.",
+      "frontend_requires": "נדרשת גרסה {version} של האפליקציה או חדשה יותר",
       "title": "תאימות",
       "view": "הצג תאימות",
       "limited": "גרסת שרת ישנה יותר",
@@ -175,12 +182,14 @@
       "members": "חברים",
       "rooms": "חדרים",
       "moderation": "ניהול תוכן",
+      "roles": "תפקידים",
       "permissions": "הרשאות",
       "security": "אבטחה",
       "event_log": "יומן אירועים",
       "system": "מערכת",
       "back_to_server": "חזור לשרת",
-      "invitations": "קישורי הזמנה"
+      "invites": "הזמנות",
+      "registration": "הרשמה"
     }
   }
 }

@@ -6,8 +6,140 @@ import {
   createUserOnRemote,
   joinDefaultRoomsOnRemote,
   getRoomOnRemote,
+  postMessageOnRemote,
   postMessageAttachmentOnRemote
 } from './fixtures/multiServer';
+
+for (const [language, source, kind = language] of [
+  [
+    'svg',
+    '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300"><circle cx="200" cy="150" r="100" fill="teal"/></svg>'
+  ],
+  ['mermaid', 'flowchart LR\nA[Open] --> B[Back] --> C[Forward]'],
+  [
+    'svg',
+    '<svg xmlns="http://www.w3.org/2000/svg" width="400" height="300"><text x="10" y="20">動き 🙂</text><circle cx="200" cy="150" r="100" fill="teal"><animate attributeName="cx" values="100;300;100" dur="4s" repeatCount="indefinite"/></circle></svg>',
+    'animated SVG'
+  ]
+]) {
+  test(`${kind} viewers close with Back and reopen with Forward`, async ({
+    page,
+    chatPage,
+    serverURL
+  }) => {
+    const sender = await createUserOnRemote(serverURL, 'diagramsender', 'password123');
+    await joinDefaultRoomsOnRemote(serverURL, sender.token);
+    const roomId = await getRoomOnRemote(serverURL, sender.token, 'general');
+    await createAndLoginTestUser(page);
+    await chatPage.goto();
+    await chatPage.enterRoom('general');
+    await postMessageOnRemote(
+      serverURL,
+      sender.token,
+      roomId,
+      `\u0060\u0060\u0060${language} rendered\n${source}\n\u0060\u0060\u0060`
+    );
+    const opener = page.getByRole('button', { name: 'Open larger', exact: true });
+    await expect(opener).toBeEnabled();
+    const roomURL = page.url();
+    await opener.click();
+    const dialog = page.getByRole('dialog', { name: 'diagram.svg', exact: true });
+    await expect(dialog).toBeVisible();
+    const snapshot = await dialog.locator('img').getAttribute('src');
+    expect(snapshot).toMatch(/^data:image\/svg\+xml/);
+    await page.goBack();
+    await expect(dialog).not.toBeVisible();
+    await expect(page).toHaveURL(roomURL);
+    await expect(opener).toBeFocused();
+    await page.goForward();
+    await expect(dialog).toBeVisible();
+    await expect(dialog.locator('img')).toHaveAttribute('src', snapshot!);
+    if (kind === 'animated SVG') {
+      await expect(dialog.locator('iframe')).toBeVisible();
+      const download = await dialog.locator('a[download]').getAttribute('href');
+      const source = decodeURIComponent(download!.split(',')[1]);
+      expect(source).toContain('動き 🙂');
+      expect(source).toContain('<animate');
+    }
+    await page.keyboard.press('Escape');
+    await expect(dialog).not.toBeVisible();
+    await expect(page).toHaveURL(roomURL);
+    await page.goForward();
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole('button', { name: 'Close', exact: true }).click();
+    await expect(dialog).not.toBeVisible();
+    await expect(page).toHaveURL(roomURL);
+  });
+}
+
+test('SVG playback survives local and remote room messages', async ({
+  page,
+  chatPage,
+  roomPage,
+  serverURL
+}) => {
+  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  const pageErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  const sender = await createUserOnRemote(serverURL, 'svgcontinuity', 'password123');
+  await joinDefaultRoomsOnRemote(serverURL, sender.token);
+  const roomId = await getRoomOnRemote(serverURL, sender.token, 'general');
+  await createAndLoginTestUser(page);
+  await chatPage.goto();
+  await chatPage.enterRoom('general');
+  await postMessageOnRemote(
+    serverURL,
+    sender.token,
+    roomId,
+    '```svg rendered\n<svg xmlns="http://www.w3.org/2000/svg" width="320" height="120"><circle cx="10" cy="60" r="8"><animate attributeName="cx" values="10;310;10" dur="600s" repeatCount="indefinite"/></circle></svg>\n```'
+  );
+  const frame = page.locator('iframe[sandbox="allow-same-origin"]');
+  await expect(page.getByRole('button', { name: 'Pause animation', exact: true })).toBeEnabled();
+  const originalFrame = await frame.elementHandle();
+  const originalSvg = await frame.evaluateHandle((frame: HTMLIFrameElement) =>
+    frame.contentDocument!.querySelector('svg')!
+  );
+  // The visible footer supports keyboard activation without moving the animation.
+  const toggle = page.getByRole('button', { name: 'Pause animation', exact: true });
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  await toggle.focus();
+  await toggle.press('Enter');
+  await frame.evaluate((frame: HTMLIFrameElement) =>
+    frame.contentDocument!.querySelector('svg')!.setCurrentTime(123)
+  );
+  const playback = () =>
+    frame.evaluate(
+      (frame: HTMLIFrameElement, original) => {
+        const svg = frame.contentDocument!.querySelector('svg')!;
+        return {
+          sameFrame: frame === original.frame,
+          sameSvg: svg === original.svg,
+          paused: svg.animationsPaused(),
+          time: svg.getCurrentTime()
+        };
+      },
+      { frame: originalFrame, svg: originalSvg }
+    );
+  const assertPaused = async () => {
+    expect(await playback()).toEqual({ sameFrame: true, sameSvg: true, paused: true, time: 123 });
+    await expect(toggle).toBeVisible();
+    await expect(toggle).toHaveAttribute('aria-pressed', 'true');
+  };
+  await postMessageOnRemote(serverURL, sender.token, roomId, 'Remote SVG continuity check');
+  await expect(page.getByText('Remote SVG continuity check', { exact: true })).toBeVisible();
+  await assertPaused();
+  await roomPage.sendMessage('Local SVG continuity check');
+  await assertPaused();
+  await toggle.focus();
+  await toggle.press('Enter');
+  await expect(toggle).toHaveAttribute('aria-pressed', 'false');
+  await postMessageOnRemote(serverURL, sender.token, roomId, 'Playing SVG continuity check');
+  await expect(page.getByText('Playing SVG continuity check', { exact: true })).toBeVisible();
+  const playing = await playback();
+  expect(playing).toMatchObject({ sameFrame: true, sameSvg: true, paused: false });
+  expect(playing.time).toBeGreaterThan(123);
+  expect(pageErrors).toEqual([]);
+});
 
 test('API-uploaded HEIC attachments render server previews and download original bytes', async ({
   page,
@@ -145,7 +277,7 @@ test('Markdown attachments render automatically and download their original byte
   await expect(trigger).toBeFocused();
 });
 
-test('another user can preview PDFs, download unsupported files and play audio in the shared mobile viewer', async ({
+test('another user can preview PDFs and text, download unsupported files and play audio in the shared mobile viewer', async ({
   page,
   chatPage,
   serverURL
@@ -209,6 +341,9 @@ test('another user can preview PDFs, download unsupported files and play audio i
         await element.play();
       });
       await expect(dialog.locator('audio')).toHaveJSProperty('paused', false);
+    } else if (contentType === 'text/plain') {
+      await expect(dialog.locator('pre')).toHaveText(`Original bytes for ${filename}\n`);
+      await expect(dialog.getByRole('region', { name: `Preview of ${filename}` })).toBeVisible();
     } else if (nativePdf) {
       await expect(dialog.getByTitle(`Preview of ${filename}`)).toBeVisible();
       await expect(dialog.locator('iframe')).toHaveAttribute('referrerpolicy', 'no-referrer');

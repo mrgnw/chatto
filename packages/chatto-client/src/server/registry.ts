@@ -25,6 +25,7 @@ import {
   type NewBearerSession
 } from '../auth/bearerSession.js';
 import type { KeepRecent } from './roomStores.js';
+import { getPublicServerInfo, type PublicServerInfo } from '../api/server.js';
 
 export type { ServerRegistration } from './catalog.js';
 export type { ServerSession } from './sessions.js';
@@ -70,7 +71,8 @@ type PersistedServerAuthentication = {
   reauthRequiredAt: number | null;
 };
 
-type ServerAuthentication = Omit<PersistedServerAuthentication, 'version'>;
+/** Durable credential fields; hosts must never log their values. */
+export type ServerAuthentication = Omit<PersistedServerAuthentication, 'version'>;
 
 function normalizeRegisteredServer(server: PersistedRegisteredServer): RegisteredServer {
   const { source: _retiredSource, ...local } = server;
@@ -340,6 +342,17 @@ function memoryStorage(): RegistryStorage {
   };
 }
 
+/**
+ * Synchronous durable persistence supplied by a native host.
+ * Writes must be committed before returning; renewal reads back its request ID
+ * before sending. Hosts own encryption, exclusive access, validation and cleanup.
+ * Authentication records override catalogue snapshots when restoring after a crash.
+ */
+export interface ServerRegistryPersistence extends RegistryStorage {
+  /** Read the saved combined catalogue; latest authentication is read separately. */
+  readServers(): RegisteredServer[];
+}
+
 /** Settings of a {@link ServerRegistry}; a client passes its own. */
 export interface ServerRegistryOptions {
   /**
@@ -347,6 +360,8 @@ export interface ServerRegistryOptions {
    * restore them at construction. Only one client in a page should use it.
    */
   deviceStorage: boolean;
+  /** Durable host storage; mutually exclusive with browser device storage. */
+  persistence?: ServerRegistryPersistence;
   /**
    * Treat a server on the page's own origin as the origin server, which uses
    * the browser's cookie session instead of a bearer token.
@@ -404,10 +419,28 @@ export class ServerRegistry {
   constructor(context: ServerRegistryContext, options: ServerRegistryOptions) {
     this.#context = context;
     this.#options = options;
-    this.#storage = options.deviceStorage ? deviceStorage : memoryStorage();
-    const persisted = options.deviceStorage
-      ? restorePersistedServerState()
-      : { registrations: [], sessions: new Map<string, ServerSession>() };
+    if (options.deviceStorage && options.persistence)
+      throw new Error('Choose browser device storage or host persistence, not both.');
+    this.#storage =
+      options.persistence ?? (options.deviceStorage ? deviceStorage : memoryStorage());
+    let persisted: ReturnType<typeof splitPersistedServers>;
+    if (options.persistence) {
+      const saved = options.persistence.readServers();
+      if (!isPersistedServerArray(saved)) throw new Error('Invalid persisted server catalogue.');
+      persisted = splitPersistedServers(
+        saved.map((server) => {
+          const authentication = options.persistence!.readAuthentication(server.id);
+          return {
+            ...server,
+            ...(authentication === undefined ? {} : (authentication ?? emptyServerAuthentication()))
+          };
+        })
+      );
+    } else {
+      persisted = options.deviceStorage
+        ? restorePersistedServerState()
+        : { registrations: [], sessions: [] };
+    }
     // Check every ID before claiming one, so a failed construction claims nothing.
     const taken = persisted.registrations.find((registration) =>
       isServerIdClaimed(registration.id)
@@ -757,6 +790,8 @@ export class ServerRegistry {
 
       const response = await fetch(new URL('/oauth/token', registration.url), {
         method: 'POST',
+        credentials: 'omit',
+        redirect: 'error',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           grant_type: 'refresh_token',
@@ -796,6 +831,11 @@ export class ServerRegistry {
         ...persistedBearerSession(credentials),
         reauthRequiredAt: null
       });
+      // A native host must not send the replacement access token until its
+      // renewal pair is durable. A lost write retries the old request identity.
+      const saved = this.#storage.readAuthentication(id);
+      if (saved?.token !== credentials.token || saved.refreshToken !== credentials.refreshToken)
+        throw new Error('Unable to persist renewed bearer session.');
       return credentials.token;
     });
   }
@@ -870,9 +910,7 @@ export class ServerRegistry {
     const store = this.#stores.get(serverId);
     if (!store || this.#startedServerNetwork.has(serverId)) return;
     this.#startedServerNetwork.add(serverId);
-    void store.serverInfo.init().catch(() => {
-      // Recovery observes the discovery error on the store.
-    });
+    if (store.serverInfo.lastDiscoveredAt === null) void store.serverInfo.init();
 
     const session = this.sessions.ensure(serverId);
     if (this.isOriginServer(serverId)) return;
@@ -890,6 +928,8 @@ export class ServerRegistry {
     options: {
       /** The session's bearer token is fixed and must never be renewed. */
       fixedToken?: boolean;
+      /** Discovery already fetched for registration; avoids a second startup request. */
+      serverInfo?: PublicServerInfo;
     } = {}
   ): void {
     if (this.#disposed) return;
@@ -911,7 +951,7 @@ export class ServerRegistry {
       this.#persistAuthentication(registration.id);
       this.#persist();
       try {
-        this.#createStore(registration.id);
+        this.#createStore(registration.id, true, options.serverInfo);
       } catch (error) {
         // A server without a store must not stay registered.
         this.removeServer(registration.id);
@@ -1060,6 +1100,15 @@ export class ServerRegistry {
   ): boolean {
     return batch(() => {
       if (!this.catalog.get(id) || !this.sessions.get(id)) return false;
+      // Discovery is public and independent of the account being replaced.
+      const previousInfo = this.#stores.get(id)?.serverInfo;
+      const serverInfo = previousInfo?.discovery ?? undefined;
+      const pendingDiscovery = previousInfo?.loading
+        ? previousInfo.init().then(() => {
+            if (previousInfo.discovery) return previousInfo.discovery;
+            throw previousInfo.error;
+          })
+        : undefined;
       this.#context.realtime.stopBus(id);
       this.#stores.get(id)?.dispose();
       this.#stores.delete(id);
@@ -1069,7 +1118,12 @@ export class ServerRegistry {
       this.sessions.replace(id, data);
       this.#persistAuthentication(id);
       this.#persist();
-      this.#createStore(id, startNetwork);
+      this.#createStore(
+        id,
+        startNetwork,
+        pendingDiscovery ? undefined : serverInfo,
+        pendingDiscovery
+      );
       return true;
     });
   }
@@ -1219,7 +1273,12 @@ export class ServerRegistry {
   }
 
   /** Create a state store for a server and wire up remote user sync. */
-  #createStore(serverId: string, startNetwork = true): Server {
+  #createStore(
+    serverId: string,
+    startNetwork = true,
+    serverInfo?: PublicServerInfo,
+    pendingDiscovery?: Promise<PublicServerInfo>
+  ): Server {
     const registration = this.catalog.get(serverId);
     if (!registration) throw new Error(`Server "${serverId}" not found in catalogue`);
     this.sessions.ensure(serverId);
@@ -1235,7 +1294,14 @@ export class ServerRegistry {
         remove: () => this.removeServer(serverId),
         fixedToken: this.#fixedTokenServers.has(serverId)
       },
-      undefined,
+      pendingDiscovery
+        ? (url) => {
+            // Transfer only the pending read. Later refreshes must reach the server.
+            const pending = pendingDiscovery;
+            pendingDiscovery = undefined;
+            return pending ?? getPublicServerInfo(url);
+          }
+        : undefined,
       () => {
         if (this.isOriginServer(serverId) && !store.currentUser.user) {
           this.clearOriginAuthentication();
@@ -1243,6 +1309,10 @@ export class ServerRegistry {
       },
       (user) => this.#acceptViewer(serverId, store, user)
     );
+    if (serverInfo) {
+      store.serverInfo.applyDiscovery(serverInfo);
+      store.serverInfo.loading = false;
+    }
     this.#stores.set(serverId, store);
     for (const watcher of [...this.#storeWatchers]) watcher(store);
     if (startNetwork) this.#startServerNetwork(serverId);

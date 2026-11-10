@@ -14,7 +14,6 @@ import (
 )
 
 func TestOperatorHEICUpload(t *testing.T) {
-	t.Parallel()
 	chatto, _ := setupTestCore(t)
 	ctx := testContext(t)
 	author, err := chatto.CreateUser(ctx, SystemActorID, "heic-import", "Import", "password")
@@ -73,8 +72,6 @@ func TestOperatorHEICUpload(t *testing.T) {
 }
 
 func TestOperatorAssetUploadOwnershipAndPublicIsolation(t *testing.T) {
-	t.Parallel()
-
 	chatto, _ := setupTestCore(t)
 	ctx := testContext(t)
 	author, err := chatto.CreateUser(ctx, SystemActorID, "operator-asset-author", "Asset Author", "password")
@@ -175,8 +172,6 @@ func TestOperatorAssetUploadOwnershipAndPublicIsolation(t *testing.T) {
 }
 
 func TestOperatorAssetUploadTargetsAndCancellation(t *testing.T) {
-	t.Parallel()
-
 	chatto, _ := setupTestCore(t)
 	ctx := testContext(t)
 	author, err := chatto.CreateUser(ctx, SystemActorID, "operator-asset-target", "Asset Target", "password")
@@ -236,5 +231,13 @@ func TestOperatorAssetUploadTargetsAndCancellation(t *testing.T) {
 	}
 	if _, err := chatto.AssetUploads().CreateUpload(ctx, input); !errors.Is(err, ErrRoomArchived) {
 		t.Fatalf("CreateUpload archived room = %v, want archived", err)
+	}
+	input.Historical = true
+	if _, err := chatto.AssetUploads().CreateUpload(ctx, input); err != nil {
+		t.Fatalf("historical operator upload: %v", err)
+	}
+	input.Operator = false
+	if _, err := chatto.AssetUploads().CreateUpload(ctx, input); !errors.Is(err, ErrPermissionDenied) {
+		t.Fatalf("public historical upload = %v, want denied", err)
 	}
 }

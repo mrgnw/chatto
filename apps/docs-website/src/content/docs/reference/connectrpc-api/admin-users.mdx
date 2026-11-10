@@ -134,6 +134,41 @@ Batch server-admin member response.
 | `roles` | `repeated chatto.api.v1.Role` | Public roles for display-name lookup. |
 
 
+<a id="chatto-admin-v1-AdminUserService-GetUserRoleAssignments"></a>
+
+### GetUserRoleAssignments
+
+Gets explicit roles and current assignment limits for one human user.
+Requires role.assign, with privileged mode active for human sessions;
+admin.view-users is not required. Returns NOT_FOUND for an unknown or
+deleted user, and FAILED_PRECONDITION for a bot account.
+
+```http
+POST /api/connect/chatto.admin.v1.AdminUserService/GetUserRoleAssignments
+```
+
+<a id="chatto-admin-v1-GetUserRoleAssignmentsRequest"></a>
+
+#### Input: GetUserRoleAssignmentsRequest
+
+Request role assignments without administrative account details.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `user_id` | `string` | Required stable ID of a human user. |
+
+
+<a id="chatto-admin-v1-GetUserRoleAssignmentsResponse"></a>
+
+#### Result: GetUserRoleAssignmentsResponse
+
+Current role assignments and limits for the requested user.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `assignments` | [`UserRoleAssignments`](/reference/connectrpc-api/types/#chatto-admin-v1-UserRoleAssignments) | Requested assignment state. Resolve role metadata with RoleService. |
+
+
 <a id="chatto-admin-v1-AdminUserService-AssignRole"></a>
 
 ### AssignRole
@@ -293,3 +328,40 @@ Request to delete a user account as a server-admin action.
 #### Result: DeleteUserResponse
 
 Result of deleting a user account.
+
+
+<a id="chatto-admin-v1-AdminUserService-SetUserDeactivated"></a>
+
+### SetUserDeactivated
+
+Deactivates or reactivates a human account. Requires user.manage-accounts.
+The caller cannot target their own account or an owner account.
+Deactivation immediately invalidates existing sessions and prevents sign-in.
+Reactivation permits new sign-ins; old sessions remain invalid.
+Repeating the current state succeeds without changing it.
+
+```http
+POST /api/connect/chatto.admin.v1.AdminUserService/SetUserDeactivated
+```
+
+<a id="chatto-admin-v1-SetUserDeactivatedRequest"></a>
+
+#### Input: SetUserDeactivatedRequest
+
+Set account access without deleting user data.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `user_id` | `string` | No field description provided. |
+| `deactivated` | `bool` | No field description provided. |
+
+
+<a id="chatto-admin-v1-SetUserDeactivatedResponse"></a>
+
+#### Result: SetUserDeactivatedResponse
+
+No message description provided.
+
+| Field | Type | Description |
+| --- | --- | --- |
+| `member` | [`AdminMember`](/reference/connectrpc-api/types/#chatto-admin-v1-AdminMember) | Updated administrative member record. |

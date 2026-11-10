@@ -4,8 +4,10 @@
   import ThemePicker from '$lib/components/ThemePicker.svelte';
   import SidebarToggle from '$lib/components/SidebarToggle.svelte';
   import { isSidebarShortcut } from '$lib/sidebar-shortcut.ts';
-  import { invalidateAll } from '$app/navigation';
+  import { invalidateAll, replaceState } from '$app/navigation';
+  import { page } from '$app/state';
   import { onMount } from 'svelte';
+  import { OutputUpdates, provideOutputUpdates } from '$lib/output-updates.ts';
   import type { PageData } from './$types';
   import {
     applyRecord,
@@ -21,13 +23,14 @@
   import WebhookInfoModal from '$lib/components/WebhookInfo.svelte';
 
   let { data }: { data: PageData } = $props();
+  const outputUpdates = provideOutputUpdates(new OutputUpdates());
   let liveRuns = $state<RunSummary[] | null>(null);
   let runs = $derived(liveRuns ?? data.runs);
   let filter = $state('');
   let visibleRuns = $derived(runs.filter((run) => !filter || run.webhook === filter));
   let selectedHook = $derived(data.webhooks.find((hook) => hook.name === filter));
   let selected = $state('');
-  let detail = $state<RunDetail | null>(null);
+  let detail = $state.raw<RunDetail | null>(null);
   let selectedSummary = $derived(runs.find((run) => run.id === selected));
   let connection = $state('Connecting…');
   let detailError = $state('');
@@ -91,7 +94,7 @@
     const url = new URL(location.href);
     url.searchParams.set('run', id);
     try {
-      history.replaceState(history.state, '', url);
+      replaceState(url, page.state);
     } catch {
       // Browser history must not block loading the selected run.
     }
@@ -103,7 +106,7 @@
     }
     const timeout = setTimeout(() => request.abort(new Error('Run details timed out')), 10_000);
     try {
-      const response = await fetch(`/api/runs/${encodeURIComponent(id)}`, {
+      const response = await fetch(`/api/runs/${encodeURIComponent(id)}?view=console`, {
         signal: request.signal
       });
       if (!response.ok)
@@ -133,23 +136,34 @@
         loadingRun = '';
       }
     }
-    const stream = new EventSource(`/api/runs/${encodeURIComponent(id)}/events`);
+    const stream = new EventSource(`/api/runs/${encodeURIComponent(id)}/events?view=console`);
     runStream = stream;
     stream.addEventListener('snapshot', (event) => {
       if (selected !== id || runStream !== stream) return;
       detail = JSON.parse(event.data) as RunDetail;
       rememberDetail(detail);
       connection = detail.status === 'running' ? 'Live' : 'Saved';
+      outputUpdates.notify(id);
       if (detail.status !== 'running') stream.close();
     });
     stream.addEventListener('record', (event) => {
       if (!detail || selected !== id || runStream !== stream) return;
       detail = applyRecord(detail, JSON.parse(event.data) as RunRecord);
       rememberDetail(detail);
+      outputUpdates.notify(id);
       if (detail.status !== 'running') {
         connection = 'Saved';
         stream.close();
       }
+    });
+    stream.addEventListener('activity', (event) => {
+      if (!detail || selected !== id || runStream !== stream) return;
+      detail = {
+        ...detail,
+        lastEventAt: (JSON.parse(event.data) as { timestamp: number }).timestamp
+      };
+      rememberDetail(detail);
+      outputUpdates.notify(id);
     });
     stream.onopen = () => {
       if (runStream === stream) connection = 'Live';
@@ -186,6 +200,21 @@
     stream.addEventListener('runs', (event) => {
       liveRuns = JSON.parse(event.data);
       listConnected = true;
+      const latest = liveRuns?.find((run) => run.id === selected);
+      if (
+        detail &&
+        latest &&
+        (latest.executionStartedAt ?? latest.startedAt) !==
+          (detail.executionStartedAt ?? detail.startedAt)
+      ) {
+        // Reactivation starts a new detail stream, even if the prior execution
+        // was cached as completed. This also refreshes its live title.
+        const id = selected;
+        detailCache.delete(id);
+        selected = '';
+        detail = null;
+        void selectRun(id);
+      }
     });
     stream.onerror = () => {
       listConnected = false;
@@ -304,7 +333,10 @@
               >
                 <span class="flex min-w-0 items-center gap-2">
                   <StatusBadge status={run.status} waiting={isRunWaiting(run.activity)} />
-                  <span class="min-w-0 flex-1 truncate text-sm font-medium">{run.workflow}</span>
+                  <span
+                    class="min-w-0 flex-1 truncate text-sm font-medium"
+                    title={run.title ?? run.workflow}>{run.title ?? run.workflow}</span
+                  >
                 </span>
                 <span
                   class="mt-1 flex min-w-0 items-center justify-between gap-2 pl-1 text-xs text-base-content/50"
@@ -360,7 +392,7 @@
       >
         <option value="">Select a run</option>
         {#each visibleRuns as run (run.id)}<option value={run.id}
-            >{run.workflow} · {run.status} · {run.reference ?? run.id}</option
+            >{run.title ?? run.workflow} · {run.status} · {run.reference ?? run.id}</option
           >{/each}
       </select>
       {#if selectedHook}

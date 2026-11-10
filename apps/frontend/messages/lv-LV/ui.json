@@ -1,5 +1,6 @@
 {
   "ui": {
+    "help": "Palīdzība",
     "toggle_sidebar": "Pārslēgt sānjoslu",
     "notifications": "Paziņojumi",
     "open_quick_switcher": "Atveriet ātro pārslēdzēju",
@@ -7,7 +8,6 @@
     "realtime_paused": "Reāllaika atjauninājumi ir apturēti. Notiek savienojuma atjaunošana...",
     "update_available": "Ir pieejama jauna versija",
     "reload": "Pārlādēt",
-    "sign_out": "Izrakstīties",
     "close": "Aizvērt",
     "auth_status": {
       "origin_title": "Sesija beidzās",
@@ -65,12 +65,14 @@
       "loading": "Notiek ielāde..."
     },
     "image_modal": {
+      "open_larger": "Atvērt lielāku",
       "previous": "Iepriekšējais attēls",
       "next": "Nākamais attēls",
       "fallback_alt": "Attēls",
       "zoom_in": "Tuvināt",
       "zoom_out": "Tālināt",
       "fit": "Ietilpināt",
+      "pause_animation": "Apturēt animāciju",
       "details": "Informācija",
       "file_type": "Faila tips"
     },

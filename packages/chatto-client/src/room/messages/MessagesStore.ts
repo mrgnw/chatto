@@ -1753,7 +1753,9 @@ export class MessagesStore {
         viewerIsFollowingThread,
         threadParticipants:
           isNewParticipant && spaceEvent.actor
-            ? [...existingParticipants, spaceEvent.actor]
+            ? actorId === rootEvent.actorId
+              ? [spaceEvent.actor, ...existingParticipants]
+              : [...existingParticipants, spaceEvent.actor]
             : existingParticipants
       }
     });

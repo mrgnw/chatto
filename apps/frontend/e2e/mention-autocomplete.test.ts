@@ -42,7 +42,7 @@ test.describe('Mention autocomplete', () => {
     await chatPage.enterRoom('general');
 
     await roomPage.messageInput.click();
-    const partialMention = `@${user.login.slice(0, 4)}`;
+    const partialMention = `@${user.login}`;
     await roomPage.messageInput.pressSequentially(partialMention);
     await roomPage.messageInput.press('Tab');
 

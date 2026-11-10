@@ -1,10 +1,9 @@
-import { fuzzyMatch } from '$lib/fuzzyMatch';
+import { fuzzyMatch, fuzzyMatchAny } from '$lib/fuzzyMatch';
 import type { RoomMember } from '$lib/state/room';
 import type { MentionRole } from './autocomplete.svelte';
 
 /**
- * Fuzzy score of an exact, case-insensitive match. See `fuzzyMatch`. A long
- * fuzzy match can score higher, so compare for equality.
+ * Fuzzy score of an exact, case-insensitive match. See `fuzzyMatch`.
  */
 const EXACT_MATCH_SCORE = 1000;
 
@@ -22,6 +21,7 @@ export type MentionResult =
  * ranks first, then users in `prioritizedUserIds` (for example, participants
  * of the current thread), then the fuzzy score. The handle breaks ties.
  *
+ * An empty query lists available candidates for fields that open on bare @.
  * The popup and Tab completion both use this order, so they stay consistent.
  */
 export function rankMentionCandidates(
@@ -36,21 +36,19 @@ export function rankMentionCandidates(
   for (const member of members) {
     if (member.deleted || !member.login) continue;
 
-    const loginScore = fuzzyMatch(query, member.login);
-    const displayScore = fuzzyMatch(query, member.displayName);
-    const score = Math.max(loginScore ?? -1, displayScore ?? -1);
+    const score = query ? (fuzzyMatchAny(query, [member.login, member.displayName]) ?? 0) : 1;
 
     if (score > 0) {
       users.push({
         result: { type: 'user', handle: member.login, member, score, priority: 0 },
-        exact: loginScore === EXACT_MATCH_SCORE || displayScore === EXACT_MATCH_SCORE,
+        exact: score === EXACT_MATCH_SCORE,
         prioritized: prioritizedUserIds.has(member.id)
       });
     }
   }
 
   for (const handle of ['all', 'here'] as const) {
-    const score = fuzzyMatch(query, handle);
+    const score = query ? fuzzyMatch(query, handle) : 1;
     if (score && score > 0) {
       others.push({ type: 'virtual', handle, score, priority: 1 });
     }
@@ -58,7 +56,7 @@ export function rankMentionCandidates(
 
   for (const role of roles) {
     if (!role.pingable || role.name === 'everyone') continue;
-    const score = fuzzyMatch(query, role.name);
+    const score = query ? fuzzyMatch(query, role.name) : 1;
     if (score && score > 0) {
       others.push({ type: 'role', handle: role.name, role, score, priority: 2 });
     }

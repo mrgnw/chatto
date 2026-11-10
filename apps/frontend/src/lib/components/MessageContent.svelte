@@ -6,7 +6,10 @@
 <script lang="ts">
   import { renderMarkdown as renderMd } from '$lib/markdown';
   import { MarkdownHtml, ContextMenu } from '$lib/ui';
-  import { resolveRenderedMentions, type RoomMember } from '$lib/mentions';
+  import { extractMentions, resolveRenderedMentions, type RoomMember } from '$lib/mentions';
+  import type { RoomMembersStore } from '@chatto/client/room/members';
+  import type { Attachment } from 'svelte/attachments';
+  import { untrack } from 'svelte';
   import { formatRelativeMessageTimestamp, wrapMessageTimestamps } from '$lib/messageTimestamps';
   import { parseTrustedMarkdownHtml } from '$lib/security/trustedHtml';
   import { getLocale } from '$lib/i18n/runtime';
@@ -14,6 +17,10 @@
   import { formatDateTime, type TimeFormatSettings } from '$lib/utils/formatTime';
   import { SvelteDate } from 'svelte/reactivity';
   import Interval from '$lib/lifecycle/Interval.svelte';
+  import { getAllContexts } from 'svelte';
+  import { enhanceEntityLinks } from './messages/enhanceEntityLinks';
+
+  const enhanceLink = enhanceEntityLinks(getAllContexts());
 
   const fallbackTimestampSettings: TimeFormatSettings = {
     get effectiveTimezone() {
@@ -31,7 +38,9 @@
 
   let {
     body,
+    artifactOwner,
     members = [],
+    mentionStore,
     roleHandles = [],
     edited = false,
     echoedToChannel = false,
@@ -41,7 +50,11 @@
     onMentionClick
   }: {
     body: string;
+    /** Loaded message identity that owns reusable images and diagram layouts. */
+    artifactOwner?: object;
     members?: RoomMember[];
+    /** Room lookup owner; retain handles only while this content is mounted. */
+    mentionStore?: RoomMembersStore;
     roleHandles?: string[];
     edited?: boolean;
     echoedToChannel?: boolean;
@@ -50,6 +63,22 @@
     timestampLocale?: string;
     onMentionClick?: (userId: string, anchorRect: DOMRect) => void;
   } = $props();
+  const resolvedMembers = $derived(mentionStore?.mentionMembers ?? members);
+  const mentionHandles = $derived(
+    extractMentions(body).filter(
+      (handle) =>
+        !['all', 'here', ...roleHandles.map((role) => role.toLowerCase())].includes(
+          handle.toLowerCase()
+        )
+    )
+  );
+  const retainMentions: Attachment = () => {
+    const store = mentionStore;
+    const handles = mentionHandles;
+    // This subscription belongs to the rendered content. Its internal cache
+    // reads must not cause the attachment to release and retain it again.
+    return untrack(() => store?.retainMentions(handles));
+  };
   let activeTimestamp = $state<ActiveTimestamp | null>(null);
   const liveNow = new SvelteDate();
   const activeTimestampLocale = $derived(timestampLocale ?? getLocale());
@@ -120,9 +149,18 @@
     return root.innerHTML;
   }
 
-  // Render markdown, then resolve the mention candidates that it marked
-  async function render(
-    body: string,
+  // Only source and locale changes need asynchronous Markdown parsing. Room
+  // snapshots can replace mention and role arrays on every new message; they
+  // must not send unchanged artwork through the await block's loading branch.
+  const sourceBody = $derived(body);
+  const markdown = $derived.by(() => {
+    getLocale();
+    return renderMd(sourceBody, { mentions: true });
+  });
+
+  /** Apply current message metadata without replacing unchanged Markdown DOM. */
+  function render(
+    html: string,
     members: RoomMember[],
     roleHandles: string[],
     edited: boolean,
@@ -130,17 +168,21 @@
     viewerLogin: string | undefined,
     timestampSettings: TimeFormatSettings,
     timestampLocale: string | undefined
-  ): Promise<string> {
-    const html = await renderMd(body, { mentions: true });
-    const wrapped = resolveRenderedMentions(html, members, viewerLogin, roleHandles);
-    const withTimestamps = wrapMessageTimestamps(
-      wrapped,
-      timestampSettings,
-      timestampLocale ?? getLocale()
-    );
-    return edited || echoedToChannel
-      ? injectMessageStateMarkers(withTimestamps, { edited, echoedToChannel })
-      : withTimestamps;
+  ): string | null {
+    try {
+      const wrapped = resolveRenderedMentions(html, members, viewerLogin, roleHandles);
+      const withTimestamps = wrapMessageTimestamps(
+        wrapped,
+        timestampSettings,
+        timestampLocale ?? getLocale()
+      );
+      return edited || echoedToChannel
+        ? injectMessageStateMarkers(withTimestamps, { edited, echoedToChannel })
+        : withTimestamps;
+    } catch (error) {
+      console.error('[MessageContent] Render failed:', error);
+      return null;
+    }
   }
 
   // Message-specific actions; MarkdownHtml owns link navigation and code copy.
@@ -175,11 +217,31 @@
   }
 </script>
 
-<div class="prose max-w-none min-w-0" dir="auto" role="presentation" onclick={handleContentClick}>
-  {#await render(body, members, roleHandles, edited, echoedToChannel, viewerLogin, timestampSettings, timestampLocale)}
+<div
+  {@attach retainMentions}
+  class="prose max-w-none min-w-0"
+  dir="auto"
+  role="presentation"
+  onclick={handleContentClick}
+>
+  {#await markdown}
     {body}
-  {:then html}
-    <MarkdownHtml {html} />
+  {:then parsed}
+    {@const html = render(
+      parsed,
+      resolvedMembers,
+      roleHandles,
+      edited,
+      echoedToChannel,
+      viewerLogin,
+      timestampSettings,
+      timestampLocale
+    )}
+    {#if html !== null}
+      <MarkdownHtml {html} {enhanceLink} {artifactOwner} />
+    {:else}
+      {body}
+    {/if}
   {:catch error}
     {body}
     {(() => {

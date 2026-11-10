@@ -6,6 +6,15 @@
       "confirmation": "Pendant 15 minutes, ceci active les autorisations supplémentaires qui te sont attribuées sur ce serveur."
     },
     "notifications": {
+      "all_notifications": "Toutes les notifications",
+      "all_types": "Tous les types",
+      "filter_status": "Statut",
+      "filter_type": "Type",
+      "reactions": "Réactions",
+      "replies": "Réponses",
+      "mentions": "Mentions",
+      "next_unread_source": "Accéder à la prochaine source non lue",
+      "no_unread": "Aucune notification non lue",
       "title": "Notifications",
       "subtitle": "Voici les nouveautés",
       "clear_read": "Effacer les notifications lues",
@@ -29,12 +38,6 @@
         "room_invitation": "{actor} vous a invité dans un salon"
       }
     },
-    "sign_out": {
-      "title": "Se déconnecter",
-      "current_server": "Serveur actuel",
-      "all_servers": "Tous les serveurs",
-      "description": "Déconnectez-vous uniquement du serveur sélectionné ou déconnectez tous les serveurs de ce client."
-    },
     "overview": {
       "title": "Présentation"
     },
@@ -44,6 +47,7 @@
       "administration": "Administration du serveur"
     },
     "user_menu": {
+      "edit_profile": "Modifier le profil",
       "profile": "Profil utilisateur",
       "send_message": "Ouvrir la conversation",
       "view_profile": "Voir le profil",
@@ -57,6 +61,9 @@
       "details": "Détails du serveur"
     },
     "compatibility": {
+      "older_frontend": "Votre application ne prend pas en charge toutes les fonctionnalités de ce serveur",
+      "frontend_upgrade": "Vous utilisez la version {version} de l’application. Mettez-la à jour ou demandez à l’administrateur du serveur qui la fournit de le faire. L’accès aux fonctionnalités dépend aussi des paramètres du serveur et de vos autorisations.",
+      "frontend_requires": "Nécessite la version {version} de l’application ou une version ultérieure",
       "title": "Compatibilité",
       "view": "Voir la compatibilité",
       "limited": "Version du serveur plus ancienne",
@@ -172,12 +179,14 @@
       "members": "Membres",
       "rooms": "Chambres",
       "moderation": "Modération",
+      "roles": "Rôles",
       "permissions": "Autorisations",
       "security": "Sécurité",
       "event_log": "Journal des événements",
       "system": "Système",
       "back_to_server": "Retour au serveur",
-      "invitations": "Liens d’invitation"
+      "invites": "Invitations",
+      "registration": "Inscription"
     }
   }
 }

@@ -13,8 +13,6 @@ import (
 )
 
 func TestThreadProjectionHistoricalImportRetainsMessageIndexWithoutInteraction(t *testing.T) {
-	t.Parallel()
-
 	p := NewThreadProjection()
 	if err := p.Apply(roomCreatedEvent("ROOM", "", "", evtv1.RoomKind_ROOM_KIND_CHANNEL), 1); err != nil {
 		t.Fatal(err)
@@ -36,8 +34,8 @@ func TestThreadProjectionHistoricalImportRetainsMessageIndexWithoutInteraction(t
 		RoomId: "ROOM", AuthorId: "REACTOR", InThread: imported.Id, HistoricalImport: true,
 	}}})
 	require.NoError(t, p.Apply(reply, 3))
-	require.Equal(t, 1, p.ThreadMetadata(imported.Id).ReplyCount)
-	require.Equal(t, []string{"REACTOR"}, p.ParticipantIDs(imported.Id))
+	require.Equal(t, 1, p.ThreadMetadata(imported.Id, "").ReplyCount)
+	require.Equal(t, []string{"REACTOR"}, p.ParticipantIDs(imported.Id, ""))
 	require.False(t, p.HasInteraction("REACTOR", "ROOM", imported.Id))
 	snapshot, err := p.Snapshot()
 	if err != nil {
@@ -51,14 +49,12 @@ func TestThreadProjectionHistoricalImportRetainsMessageIndexWithoutInteraction(t
 	if !ok || rootID != imported.Id || restored.HasInteraction("AUTHOR", "ROOM", imported.Id) {
 		t.Fatal("snapshot changed historical thread state")
 	}
-	require.Equal(t, p.ThreadMetadata(imported.Id), restored.ThreadMetadata(imported.Id))
+	require.Equal(t, p.ThreadMetadata(imported.Id, ""), restored.ThreadMetadata(imported.Id, ""))
 	require.False(t, restored.HasInteraction("REACTOR", "ROOM", imported.Id))
 	require.Empty(t, restored.ThreadFollowers("ROOM", imported.Id))
 }
 
 func TestThreadProjectionDMReceivedInteractions(t *testing.T) {
-	t.Parallel()
-
 	joined := func(id, userID string) *evtv1.Event {
 		return &evtv1.Event{Id: id, ActorId: userID, Event: &evtv1.Event_UserJoinedRoom{
 			UserJoinedRoom: &evtv1.UserJoinedRoomEvent{RoomId: "DM"},
@@ -122,8 +118,6 @@ func TestThreadProjectionDMReceivedInteractions(t *testing.T) {
 }
 
 func TestThreadProjectionSnapshotRoundTripAndTailReplay(t *testing.T) {
-	t.Parallel()
-
 	full := NewThreadProjection()
 	eventsBefore := []*evtv1.Event{
 		roomCreatedTimelineEvent("ROOM", "R1", "room", 1),
@@ -197,16 +191,12 @@ func TestThreadProjectionSnapshotRoundTripAndTailReplay(t *testing.T) {
 }
 
 func TestThreadProjectionSnapshotContractID(t *testing.T) {
-	t.Parallel()
-
 	if got := NewThreadProjection().SnapshotContractID(); !strings.HasPrefix(got, "v3-") {
 		t.Fatalf("SnapshotContractID() = %q, want v3 schema contract", got)
 	}
 }
 
 func TestThreadProjectionSnapshotRestoreFailureIsTransactional(t *testing.T) {
-	t.Parallel()
-
 	p := NewThreadProjection()
 	if err := p.Apply(threadFollowSnapshotTestEvent("FOLLOW", "R1", "ROOT", "U1", true), 1); err != nil {
 		t.Fatal(err)
@@ -243,8 +233,6 @@ func threadEventIDs(entries []ThreadTimelineEntry) []string {
 }
 
 func TestThreadProjection_Empty(t *testing.T) {
-	t.Parallel()
-
 	p := NewThreadProjection()
 	if got := p.ThreadEvents("ROOT"); got != nil {
 		t.Errorf("ThreadEvents on empty = %v, want nil", got)
@@ -262,8 +250,6 @@ func directThreadMention(userID string) *evtv1.MessageMention {
 }
 
 func TestThreadProjection_DerivesInteractionRelationshipsFromTypedMessageFacts(t *testing.T) {
-	t.Parallel()
-
 	p := NewThreadProjection()
 	root := postedEvent(postedOpts{
 		envelopeID: "ROOT", roomID: "R1", actorID: "AUTHOR", at: 2,
@@ -319,8 +305,6 @@ func TestThreadProjection_DerivesInteractionRelationshipsFromTypedMessageFacts(t
 }
 
 func TestThreadProjection_RepeatedInteractionCausesShareOneRelationship(t *testing.T) {
-	t.Parallel()
-
 	p := NewThreadProjection()
 	applyAll(t, p, []*evtv1.Event{
 		roomCreatedTimelineEvent("ROOM", "R1", "room", 1),
@@ -339,8 +323,6 @@ func TestThreadProjection_RepeatedInteractionCausesShareOneRelationship(t *testi
 }
 
 func TestThreadProjection_RootMessageNotStored(t *testing.T) {
-	t.Parallel()
-
 	p := NewThreadProjection()
 	applyAll(t, p, []*evtv1.Event{
 		postedEvent(postedOpts{envelopeID: "ENV-ROOT", eventID: "ROOT", roomID: "R1", actorID: "U1", at: 1}),
@@ -355,8 +337,6 @@ func TestThreadProjection_RootMessageNotStored(t *testing.T) {
 }
 
 func TestThreadProjection_ThreadCreatedInitializesEmptyThread(t *testing.T) {
-	t.Parallel()
-
 	p := NewThreadProjection()
 	applyAll(t, p, []*evtv1.Event{
 		threadCreatedEvent("ENV-THREAD", "R1", "ROOT", "U1", 1),
@@ -377,8 +357,6 @@ func TestThreadProjection_ThreadCreatedInitializesEmptyThread(t *testing.T) {
 }
 
 func TestThreadProjection_RepliesAppended(t *testing.T) {
-	t.Parallel()
-
 	p := NewThreadProjection()
 	applyAll(t, p, []*evtv1.Event{
 		postedEvent(postedOpts{envelopeID: "ENV-ROOT", eventID: "ROOT", roomID: "R1", actorID: "U1", at: 1}),
@@ -396,7 +374,7 @@ func TestThreadProjection_RepliesAppended(t *testing.T) {
 	if got := p.ReplyCount("ROOT"); got != 2 {
 		t.Errorf("ReplyCount = %d, want 2", got)
 	}
-	metadata := p.ThreadMetadata("ROOT")
+	metadata := p.ThreadMetadata("ROOT", "")
 	if metadata.ReplyCount != 2 {
 		t.Errorf("ThreadMetadata ReplyCount = %d, want 2", metadata.ReplyCount)
 	}
@@ -415,15 +393,13 @@ func TestThreadProjection_RepliesAppended(t *testing.T) {
 }
 
 func TestThreadProjection_LatestReplyUsesStreamOrderDespiteClockSkew(t *testing.T) {
-	t.Parallel()
-
 	p := NewThreadProjection()
 	applyAll(t, p, []*evtv1.Event{
 		postedEvent(postedOpts{envelopeID: "ENV-R1", eventID: "REPLY1", roomID: "R1", actorID: "U1", inThread: "ROOT", at: 3}),
 		postedEvent(postedOpts{envelopeID: "ENV-R2", eventID: "REPLY2", roomID: "R1", actorID: "U2", inThread: "ROOT", at: 2}),
 	})
 
-	metadata := p.ThreadMetadata("ROOT")
+	metadata := p.ThreadMetadata("ROOT", "")
 	if got, want := metadata.LatestReplyEventID, "ENV-R2"; got != want {
 		t.Fatalf("LatestReplyEventID = %q, want stream-latest %q", got, want)
 	}
@@ -433,15 +409,13 @@ func TestThreadProjection_LatestReplyUsesStreamOrderDespiteClockSkew(t *testing.
 }
 
 func TestThreadProjection_LatestReplyRetainsZeroTimestampEvent(t *testing.T) {
-	t.Parallel()
-
 	p := NewThreadProjection()
 	first := postedEvent(postedOpts{envelopeID: "ENV-R1", eventID: "REPLY1", roomID: "R1", actorID: "U1", inThread: "ROOT", at: 1})
 	latest := postedEvent(postedOpts{envelopeID: "ENV-R2", eventID: "REPLY2", roomID: "R1", actorID: "U2", inThread: "ROOT", at: 2})
 	latest.CreatedAt = nil
 	applyAll(t, p, []*evtv1.Event{first, latest})
 
-	metadata := p.ThreadMetadata("ROOT")
+	metadata := p.ThreadMetadata("ROOT", "")
 	if got, want := metadata.LatestReplyEventID, "ENV-R2"; got != want {
 		t.Fatalf("LatestReplyEventID = %q, want stream-latest %q", got, want)
 	}
@@ -451,8 +425,6 @@ func TestThreadProjection_LatestReplyRetainsZeroTimestampEvent(t *testing.T) {
 }
 
 func TestThreadProjection_ApplyDoesNotMutateInputEvent(t *testing.T) {
-	t.Parallel()
-
 	p := NewThreadProjection()
 	reply := postedEvent(postedOpts{envelopeID: "ENV-R1", eventID: "REPLY1", roomID: "R1", actorID: "U2", inThread: "ROOT", inReplyTo: "ROOT", at: 1})
 	assertApplyDoesNotMutateEvent(t, p, reply, 1)
@@ -470,8 +442,6 @@ func TestThreadProjection_ApplyDoesNotMutateInputEvent(t *testing.T) {
 }
 
 func TestThreadProjection_ReplyWithLegacyEmptyPayloadEventID(t *testing.T) {
-	t.Parallel()
-
 	p := NewThreadProjection()
 	applyAll(t, p, []*evtv1.Event{
 		postedEvent(postedOpts{envelopeID: "ROOT", eventID: "ROOT", roomID: "R1", actorID: "U1", at: 1}),
@@ -492,8 +462,6 @@ func TestThreadProjection_ReplyWithLegacyEmptyPayloadEventID(t *testing.T) {
 }
 
 func TestThreadProjection_EditOfReplyDoesNotAddThreadRow(t *testing.T) {
-	t.Parallel()
-
 	p := NewThreadProjection()
 	applyAll(t, p, []*evtv1.Event{
 		postedEvent(postedOpts{envelopeID: "ENV-ROOT", eventID: "ROOT", roomID: "R1", actorID: "U1", at: 1}),
@@ -512,8 +480,6 @@ func TestThreadProjection_EditOfReplyDoesNotAddThreadRow(t *testing.T) {
 }
 
 func TestThreadProjection_RetractOfReplyFoldsIntoSummary(t *testing.T) {
-	t.Parallel()
-
 	p := NewThreadProjection()
 	applyAll(t, p, []*evtv1.Event{
 		postedEvent(postedOpts{envelopeID: "ENV-ROOT", eventID: "ROOT", roomID: "R1", actorID: "U1", at: 1}),
@@ -528,7 +494,7 @@ func TestThreadProjection_RetractOfReplyFoldsIntoSummary(t *testing.T) {
 	if got := p.ReplyCount("ROOT"); got != 0 {
 		t.Errorf("ReplyCount after retract = %d, want 0", got)
 	}
-	metadata := p.ThreadMetadata("ROOT")
+	metadata := p.ThreadMetadata("ROOT", "")
 	if metadata.ReplyCount != 0 {
 		t.Errorf("ThreadMetadata ReplyCount after retract = %d, want 0", metadata.ReplyCount)
 	}
@@ -538,8 +504,6 @@ func TestThreadProjection_RetractOfReplyFoldsIntoSummary(t *testing.T) {
 }
 
 func TestThreadProjection_EditOfRootMessageNotInThreadBucket(t *testing.T) {
-	t.Parallel()
-
 	// Root message edits/retracts are room-timeline concerns, not
 	// thread-projection ones. Confirm they don't leak into the thread.
 	p := NewThreadProjection()
@@ -559,8 +523,6 @@ func TestThreadProjection_EditOfRootMessageNotInThreadBucket(t *testing.T) {
 }
 
 func TestThreadProjection_OutOfOrderEditDropped(t *testing.T) {
-	t.Parallel()
-
 	// Edit arrives before the reply post. Without messageToThread
 	// mapping, the edit doesn't know which thread it belongs to and is
 	// silently dropped.
@@ -574,8 +536,6 @@ func TestThreadProjection_OutOfOrderEditDropped(t *testing.T) {
 }
 
 func TestThreadProjection_MultipleThreadsIsolated(t *testing.T) {
-	t.Parallel()
-
 	p := NewThreadProjection()
 	applyAll(t, p, []*evtv1.Event{
 		postedEvent(postedOpts{envelopeID: "ENV-T1A", eventID: "T1A", roomID: "R1", actorID: "U1", inThread: "T1", inReplyTo: "T1", at: 1}),
@@ -595,8 +555,6 @@ func TestThreadProjection_MultipleThreadsIsolated(t *testing.T) {
 }
 
 func TestThreadProjection_MetadataRecomputesWhenLatestReplyRetracted(t *testing.T) {
-	t.Parallel()
-
 	p := NewThreadProjection()
 	applyAll(t, p, []*evtv1.Event{
 		postedEvent(postedOpts{envelopeID: "ENV-R1", eventID: "REPLY1", roomID: "R1", actorID: "U1", inThread: "ROOT", inReplyTo: "ROOT", at: 2}),
@@ -604,7 +562,7 @@ func TestThreadProjection_MetadataRecomputesWhenLatestReplyRetracted(t *testing.
 		retractedEvent("ENV-RETRACT-R2", "ENV-R2", "R1", "MOD", "spam", 4),
 	})
 
-	metadata := p.ThreadMetadata("ROOT")
+	metadata := p.ThreadMetadata("ROOT", "")
 	if metadata.ReplyCount != 1 {
 		t.Fatalf("ReplyCount = %d, want 1", metadata.ReplyCount)
 	}
@@ -623,8 +581,6 @@ func TestThreadProjection_MetadataRecomputesWhenLatestReplyRetracted(t *testing.
 }
 
 func TestThreadProjection_Idempotency(t *testing.T) {
-	t.Parallel()
-
 	p := NewThreadProjection()
 	reply := postedEvent(postedOpts{envelopeID: "ENV-R1", eventID: "REPLY1", roomID: "R1", actorID: "U2", inThread: "ROOT", inReplyTo: "ROOT", at: 1})
 	if err := p.Apply(reply, 1); err != nil {
@@ -649,8 +605,6 @@ func TestThreadProjection_Idempotency(t *testing.T) {
 }
 
 func TestThreadProjection_IdempotencyDoesNotIndexIgnoredRoomEvents(t *testing.T) {
-	t.Parallel()
-
 	p := NewThreadProjection()
 	root := postedEvent(postedOpts{envelopeID: "ENV-ROOT", eventID: "ROOT", roomID: "R1", actorID: "U1", at: 1})
 	if err := p.Apply(root, 1); err != nil {
@@ -676,8 +630,6 @@ func TestThreadProjection_IdempotencyDoesNotIndexIgnoredRoomEvents(t *testing.T)
 }
 
 func TestThreadProjection_ThreadFollowEventsUpdateIndexes(t *testing.T) {
-	t.Parallel()
-
 	p := NewThreadProjection()
 	applyAll(t, p, []*evtv1.Event{
 		{
@@ -749,8 +701,6 @@ func TestThreadProjection_ThreadFollowEventsUpdateIndexes(t *testing.T) {
 }
 
 func TestThreadProjection_SubjectFilter(t *testing.T) {
-	t.Parallel()
-
 	subjects := NewThreadProjection().Subjects()
 	want := map[string]bool{
 		evtstream.RoomEventTypeFilter(evtstream.EventRoomCreated):               true,
@@ -784,8 +734,6 @@ func TestThreadProjection_SubjectFilter(t *testing.T) {
 }
 
 func TestThreadParticipantsExceedPreviewAndSurviveRestore(t *testing.T) {
-	t.Parallel()
-
 	p := NewThreadProjection()
 	events := []*evtv1.Event{
 		roomCreatedTimelineEvent("ROOM", "R1", "room", 1),
@@ -797,10 +745,10 @@ func TestThreadParticipantsExceedPreviewAndSurviveRestore(t *testing.T) {
 		events = append(events, postedEvent(postedOpts{envelopeID: id, eventID: id, roomID: "R1", actorID: fmt.Sprintf("U%02d", i), inThread: "ROOT", at: i + 3}))
 	}
 	applyAll(t, p, events)
-	if got := len(p.ParticipantIDs("ROOT")); got != 60 {
+	if got := len(p.ParticipantIDs("ROOT", "")); got != 60 {
 		t.Fatalf("participants = %d, want 60", got)
 	}
-	if got := p.ThreadMetadata("ROOT"); got.ParticipantCount != 60 || len(got.ParticipantIDs) != 50 {
+	if got := p.ThreadMetadata("ROOT", ""); got.ParticipantCount != 60 || len(got.ParticipantIDs) != 50 {
 		t.Fatalf("metadata count=%d preview=%d", got.ParticipantCount, len(got.ParticipantIDs))
 	}
 	snapshot, err := p.Snapshot()
@@ -811,7 +759,7 @@ func TestThreadParticipantsExceedPreviewAndSurviveRestore(t *testing.T) {
 	if err := restored.Restore(snapshot); err != nil {
 		t.Fatal(err)
 	}
-	if got := len(restored.ParticipantIDs("ROOT")); got != 60 {
+	if got := len(restored.ParticipantIDs("ROOT", "")); got != 60 {
 		t.Fatalf("restored participants = %d, want 60", got)
 	}
 	if err := restored.Apply(retractedEvent("RETRACT", "REPLY-59", "R1", "U59", "removed", 70), 64); err != nil {
@@ -820,18 +768,16 @@ func TestThreadParticipantsExceedPreviewAndSurviveRestore(t *testing.T) {
 	if err := restored.Apply(userKeyShreddedSnapshotTestEvent("SHRED", "U58"), 65); err != nil {
 		t.Fatal(err)
 	}
-	ids := restored.ParticipantIDs("ROOT")
+	ids := restored.ParticipantIDs("ROOT", "")
 	if len(ids) != 58 || slices.Contains(ids, "U59") || slices.Contains(ids, "U58") || slices.Contains(ids, "AUTHOR") {
 		t.Fatalf("participants after removal = %v", ids)
 	}
-	if restored.ThreadMetadata("ROOT").ParticipantCount != 58 {
+	if restored.ThreadMetadata("ROOT", "").ParticipantCount != 58 {
 		t.Fatal("participant count did not follow removals")
 	}
 }
 
 func TestThreadProjection_InteractionRequiresMatchingRoom(t *testing.T) {
-	t.Parallel()
-
 	p := NewThreadProjection()
 	applyAll(t, p, []*evtv1.Event{
 		roomCreatedTimelineEvent("ROOM-1", "R1", "one", 1),
@@ -847,8 +793,6 @@ func TestThreadProjection_InteractionRequiresMatchingRoom(t *testing.T) {
 }
 
 func TestThreadProjection_RoomDeletionClearsInteractionState(t *testing.T) {
-	t.Parallel()
-
 	p := NewThreadProjection()
 	deleted := roomDeletedEvent("R1")
 	deleted.Id = "DELETE"

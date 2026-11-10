@@ -19,13 +19,15 @@ declarations. Set `CHATTO_CLIENT_RELEASE_DIR` to save the verified tarball.
 `check:release` rejects versions already in npm history. Set `RELEASE_TAG`
 to also check that the tag matches the package version.
 
-Release-please gives the client, Chatto server, frontend, and desktop the same
+Sweet Release gives the client, Chatto server, frontend, and desktop the same
 version and release PR. Client changes contribute to the root changelog.
-Tags use `v<VERSION>`. The `publish-chatto-client.yml` workflow
-checks and saves a tarball, then publishes that exact artifact. Manual workflow
-runs verify and save an artifact without publishing it. Prereleases use the npm
-`next` tag; stable releases use `latest`. npm publication runs independently of
-server and desktop publication, so completion times can differ.
+Tags use `v<VERSION>`. After the `chatto-release` approval, server build, and
+desktop assembly succeed, `release.yml` calls the reusable
+`publish-chatto-client.yml` workflow. It checks and saves a tarball, then
+publishes that exact artifact. A failed server or desktop build prevents npm
+publication. A failed npm publication keeps the GitHub release in draft. Manual
+workflow runs verify and save an artifact without publishing it. Prereleases
+use the npm `next` tag; stable releases use `latest`.
 
 The former `0.1.x` versions, `chatto-client/v*` tags, and package changelog remain
 historical records. The next client publication uses the next shared Chatto
@@ -34,7 +36,9 @@ the existing compatibility rules still apply.
 
 Before automated publication, configure an npm trusted publisher for
 `@chatto/client`: owner `chattocorp`, repository `chatto`, workflow
-`publish-chatto-client.yml`, environment `npm`. Allow `npm publish`.
+`release.yml`, environment `npm`. Allow `npm publish`. Replace the previous
+`publish-chatto-client.yml` trusted publisher before the next release: npm
+checks the calling workflow identity for reusable workflows.
 See [npm trusted publishing](https://docs.npmjs.com/trusted-publishers/).
 Configure it when the release is ready, because a new configuration must
 complete its first successful publication within two days.
@@ -48,6 +52,6 @@ npm publish <verified-tarball.tgz> --access public --ignore-scripts --registry=h
 ```
 
 Do not publish the same version again. If the first version is published
-manually, align the release-please manifest and release tag before the next
+manually, align the root Sweet manifest and release tag before the next
 release. Use pnpm to build and pack from source; `npm publish` from the source
 directory does not apply pnpm's publication-directory settings.

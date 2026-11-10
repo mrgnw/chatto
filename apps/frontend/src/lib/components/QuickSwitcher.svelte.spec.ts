@@ -77,8 +77,7 @@ const mocks = vi.hoisted(() => ({
       isInitialLoading: false
     },
     messageSearch: {
-      available: true,
-      ensureStatus: vi.fn(),
+      availability: { available: true, ensureStatus: vi.fn() },
       privacyRevision: 0,
       subscribePrivacyInvalidation: vi.fn(
         (listener: (matches: (result: { id: string }) => boolean, force: boolean) => void) => {
@@ -338,8 +337,8 @@ beforeEach(() => {
   mocks.listRoomMembers.mockClear();
   mocks.listUsers.mockClear();
   mocks.searchMessages.mockReset();
-  mocks.store.messageSearch.ensureStatus.mockReset();
-  mocks.store.messageSearch.available = true;
+  mocks.store.messageSearch.availability.ensureStatus.mockReset();
+  mocks.store.messageSearch.availability.available = true;
   mocks.store.messageSearch.privacyRevision = 0;
   mocks.store.messageSearch.subscribePrivacyInvalidation.mockClear();
   mocks.privacyListeners = [];
@@ -440,6 +439,25 @@ describe('QuickSwitcher', () => {
       expect(mocks.goto).toHaveBeenCalledWith('/chat/-/overview');
     });
     expect(mocks.recents.record).toHaveBeenCalledWith('/chat/-/overview');
+  });
+
+  it('hides new-DM candidates while deactivated and restores them without reopening', async () => {
+    const profiles = mocks.store.projection.users;
+    profiles.set(
+      'inactive-target',
+      new DirectoryMember({
+        user: { id: 'inactive-target', login: 'statusperson', displayName: 'Status Person' }
+      })
+    );
+    const { container } = await renderOpenSwitcher();
+    setSearch(container, 'statusperson');
+    expect(resultButtons(container)).toHaveLength(1);
+    profiles.setDeactivated('inactive-target', true);
+    flushSync();
+    expect(resultButtons(container)).toHaveLength(0);
+    profiles.setDeactivated('inactive-target', false);
+    flushSync();
+    expect(resultButtons(container)).toHaveLength(1);
   });
 
   it('finds existing conversations locally and opens the room without starting a DM', async () => {

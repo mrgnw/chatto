@@ -1,8 +1,6 @@
 package interchange
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/mail"
@@ -16,7 +14,7 @@ type messageState struct {
 	room, author, thread, reply string
 	created                     *string
 	final, deleted              bool
-	versions                    []Content
+	exposed                     bool
 	reactions                   map[string]bool
 }
 
@@ -100,17 +98,21 @@ func (a *Archive) validateReferences() error {
 			return fail("duplicate asset path")
 		}
 		paths[asset.Storage.Path] = true
-		data, ok := a.Files[asset.Storage.Path]
+		digest, ok := a.sums[asset.Storage.Path]
 		if !ok {
 			return fail("missing asset file")
 		}
-		h := sha256.Sum256(data)
-		if int64(len(data)) != asset.Storage.Size || hex.EncodeToString(h[:]) != asset.Storage.SHA256 {
+		if a.sizes[asset.Storage.Path] != asset.Storage.Size || digest != asset.Storage.SHA256 {
 			return fail("asset integrity mismatch")
 		}
 	}
-	if len(paths) != len(a.Files) {
+	if len(paths)+len(names) != len(a.sums) {
 		return fail("unlisted asset file")
+	}
+	for _, u := range a.Users {
+		if u.AvatarAssetID != "" && !assets[u.AvatarAssetID] {
+			return fail("unknown user avatar asset")
+		}
 	}
 	checkContent := func(c Content) error {
 		if c.Status == "available" {
@@ -133,7 +135,9 @@ func (a *Archive) validateReferences() error {
 	members := map[string]map[string]bool{}
 	finalMembers := map[string]bool{}
 	metadata := map[string]map[string]string{}
-	for index, e := range a.Events {
+	a.EventCount = 0
+	err = a.VisitEvents(func(e Event) error {
+		a.EventCount++
 		err := func() error {
 			if ids[e.ID] {
 				return fail("duplicate event ID")
@@ -197,7 +201,7 @@ func (a *Archive) validateReferences() error {
 					if old.deleted && !m.deleted {
 						return fail("snapshot resurrects deleted content")
 					}
-					m.versions = old.versions
+					m.exposed = old.exposed
 				}
 				if final {
 					for _, t := range []*string{d.CreatedAt, d.EditedAt, d.DeletedAt} {
@@ -231,7 +235,7 @@ func (a *Archive) validateReferences() error {
 					}
 				}
 				if !m.deleted {
-					m.versions = append(m.versions, d.Content)
+					m.exposed = m.exposed || d.Content.Status != "unavailable"
 				}
 				messages[d.MessageID] = m
 			case "message.edited", "message.deleted", "reaction.added", "reaction.removed":
@@ -252,7 +256,7 @@ func (a *Archive) validateReferences() error {
 					if err := checkContent(d.Content); err != nil {
 						return err
 					}
-					m.versions = append(m.versions, d.Content)
+					m.exposed = m.exposed || d.Content.Status != "unavailable"
 				} else if e.Type == "message.deleted" {
 					if m.deleted {
 						return fail("duplicate deletion")
@@ -315,6 +319,18 @@ func (a *Archive) validateReferences() error {
 						return fail("invalid membership transition")
 					}
 					state[d.UserID] = want
+					emojis := map[string]bool{}
+					for _, reaction := range d.Reactions {
+						if emojis[reaction.Emoji] {
+							return fail("duplicate reaction group")
+						}
+						emojis[reaction.Emoji] = true
+						for _, id := range reaction.UserIDs {
+							if !users[id] {
+								return fail("unknown reactor reference")
+							}
+						}
+					}
 				}
 			default:
 				if metadata[e.RoomID] == nil {
@@ -337,9 +353,10 @@ func (a *Archive) validateReferences() error {
 			}
 			return nil
 		}()
-		if err != nil {
-			return fmt.Errorf("events.jsonl record %d: %w", index+1, err)
-		}
+		return err
+	})
+	if err != nil {
+		return err
 	}
 	if len(finalMembers) != len(rooms) {
 		return fail("missing final membership snapshot")
@@ -356,12 +373,8 @@ func (a *Archive) validateReferences() error {
 		}
 	}
 	for _, m := range messages {
-		if m.deleted {
-			for _, c := range m.versions {
-				if c.Status != "unavailable" {
-					return fail("deleted content exposed in earlier history")
-				}
-			}
+		if m.deleted && m.exposed {
+			return fail("deleted content exposed in earlier history")
 		}
 	}
 	return nil

@@ -1,4 +1,4 @@
-# Sign each generated NSIS executable before it is embedded or published.
+# Sign each generated NSIS executable and MSI package before publication.
 param([Parameter(Mandatory)][string]$File)
 $ErrorActionPreference = 'Stop'
 
@@ -14,9 +14,9 @@ Invoke-ArtifactSigning -Endpoint $env:CHATTO_WINDOWS_SIGNING_ENDPOINT `
     -CertificateProfileName $env:CHATTO_WINDOWS_CERTIFICATE_PROFILE_NAME `
     -Files $File -FileDigest SHA256 -TimestampDigest SHA256 `
     -TimestampRfc3161 'http://timestamp.acs.microsoft.com' `
-    -ExcludeEnvironmentCredential $true -ExcludeWorkloadIdentityCredential $true `
-    -ExcludeManagedIdentityCredential $true -ExcludeAzureCliCredential $false `
-    -Description 'Chatto Desktop' -DescriptionUrl 'https://chatto.run'
+    -ExcludeEnvironmentCredential:$true -ExcludeWorkloadIdentityCredential:$true `
+    -ExcludeManagedIdentityCredential:$true -ExcludeAzureCliCredential:$false `
+    -Description 'Chatto' -DescriptionUrl 'https://chatto.run'
 
 $signature = Get-AuthenticodeSignature -LiteralPath $File
 if ($signature.Status -ne 'Valid' -or $null -eq $signature.TimeStamperCertificate -or

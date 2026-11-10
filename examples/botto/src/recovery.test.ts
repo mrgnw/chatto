@@ -79,6 +79,21 @@ function setup() {
   return { path, delivery, list, getMessage, users, run };
 }
 
+test('recovery admits image-only messages and skips empty messages', async () => {
+  const { run, delivery, getMessage } = setup();
+  getMessage.mockImplementation(async ({ messageId }) => ({
+    id: messageId,
+    roomId: 'room',
+    authorId: 'human',
+    body: '',
+    ...(messageId === 'one'
+      ? { attachments: [{ id: 'image', filename: 'image.png', contentType: 'image/png' }] }
+      : {})
+  }));
+  await run();
+  expect(delivery.queued.map((message) => message.id)).toEqual(['one']);
+});
+
 test('restart recovers paginated offline mentions in order and deduplicates live delivery', async () => {
   const { path, delivery, list, run } = setup();
   list
@@ -156,6 +171,37 @@ test('recovery ignores deleted messages, other bots, and disallowed authors', as
   users.mockResolvedValue({ users: [{ user: { id: 'human' } }] });
   await run(delivery, 'someone-else');
   expect(delivery.queued).toEqual([]);
+});
+
+test('recovered DM replies address Botto even when the reply target is another human message', async () => {
+  const { run, delivery, list, getMessage } = setup();
+  list.mockResolvedValue(
+    new ListNotificationOccurrencesResponse({
+      occurrences: [
+        new NotificationOccurrence({
+          id: 'notification-dm',
+          createdAt: { seconds: 2n },
+          signal: {
+            kind: {
+              case: 'directMessageReceived',
+              value: { message: { room: { id: 'room' }, eventId: 'dm' } }
+            }
+          }
+        })
+      ]
+    })
+  );
+  getMessage.mockImplementation(async () => ({
+    id: 'dm',
+    roomId: 'room',
+    authorId: 'human',
+    body: 'One more thing',
+    threadRootId: 'root',
+    inReplyTo: 'earlier-human-message'
+  }));
+  await run(delivery, undefined, ['direct_message']);
+  expect(delivery.queued).toMatchObject([{ id: 'dm', reasons: ['direct_message'] }]);
+  expect(getMessage).toHaveBeenCalledOnce();
 });
 
 test.each(['other', 'bot'])('recovery checks the reply recipient: %s', async (authorId) => {

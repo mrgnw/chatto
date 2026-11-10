@@ -11,6 +11,9 @@ one session, gives parent messages to it, and emits its completed replies.
 
 ## Behavior
 
+- Completed-text callbacks identify messages that contain tool calls. Hosts can
+  deliver interim text during work and deliver the returned answer after cleanup.
+
 - Agent task definitions are reusable and do not start a session at definition
   time. Each invocation owns setup, execution, cancellation, and disposal.
 - Agent tasks accept string prompts by default. A typed input schema requires
@@ -64,6 +67,9 @@ one session, gives parent messages to it, and emits its completed replies.
   agent in memory.
 - Abort signals and disposal cancel pending work. Cancellation cannot undo a
   tool's external effects or stop uncooperative code.
+- Cancelling an agent task starts session disposal immediately so native tool
+  transports can close. The task joins that disposal before cleanup finishes;
+  it does not wait for a blocked tool before starting transport shutdown.
 - `awaitWithSignal` lets tasks stop waiting for an external operation that has
   no cancellation API. It checks the signal before starting work and removes
   its listener when the wait ends. It cannot stop the external operation; the
@@ -82,7 +88,8 @@ one session, gives parent messages to it, and emits its completed replies.
   This avoids repeated promise and timer plumbing in application loops; batching,
   data, and recovery remain the caller's responsibility. See [task channels](../task-channels.md#wake-a-processing-loop).
 - Classifiers run as ordinary tasks. `createClassifier` runs one tool-free agent
-  turn with no local instructions or saved history. `createChoiceClassifier`
+  invocation and lets callers omit model content from logs with `logContent: false`.
+  It performs one turn with no local instructions or saved history. `createChoiceClassifier`
   sends one typed choice question to OpenRouter's Decisions API without an agent
   session. The caller supplies the input schema, policy, model, and named choices;
   the choice result includes provider probabilities and confidence. Both have a
@@ -93,6 +100,13 @@ one session, gives parent messages to it, and emits its completed replies.
   usage and cost under the task's run context, without input text or credentials.
   Classification policy, thresholds, and any authorization based on it belong to
   the application.
+- `createDescription` defines a tool-free task that describes caller-supplied
+  text. The caller selects the model, instructions, and reasoning level (off by
+  default). Each call has a fresh session, no local instructions or saved history,
+  no content logs, and a 30-second deadline. Normal task observation records usage
+  and cost. It returns trimmed text, which can be empty when the instructions
+  permit omission. Failures and cancellation propagate without retries. The
+  caller owns any title updates, persistence, and fallback policy.
 - Shared agent sessions can be resumed across workflows with an explicit ID.
   Only one lease in the process can use a file at a time. Scopes have separate
   files. Opening a shared session renews its activity and removes other inactive
@@ -111,6 +125,10 @@ one session, gives parent messages to it, and emits its completed replies.
   with active work shows its quiet time after two minutes without a recorded event.
 
 ## Design Decisions
+
+Agent resource options can select explicit skill paths instead of Pi's default
+discovery. Pi owns skill parsing and catalog instructions. The host selects tools
+and enforces any file-access restrictions; skill discovery grants no access.
 
 ### 1. Choose output behavior explicitly
 

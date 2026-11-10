@@ -1,7 +1,7 @@
 # FDR-001: Roles & Permissions (RBAC)
 
 **Status:** Active
-**Last reviewed:** 2026-10-26
+**Last reviewed:** 2026-11-05
 
 ## Overview
 
@@ -36,7 +36,7 @@ its `room.join` permission. This lets a room manager invite a user who cannot
 join independently. These permissions also authorize removal after join
 permission is lost. Archived channels have no column in this matrix.
 
-Bot owners and human bot managers can manage their bots without `room.manage`.
+Bot owners and callers with `bot.manage` can manage bots without `room.manage`.
 Without an account or room management override, adding a bot requires its
 effective `room.join`, including its owner's ceiling. Suspensions and archived rooms
 prevent adding. Universal membership remains automatic; DMs are excluded.
@@ -75,15 +75,50 @@ the backend permission catalog. Update both catalogs together.
 - Account permission matrices fill the available page height. Permission rows
   scroll inside the matrix, while the filter and column headings stay visible.
 
+- Server settings lists Roles directly above Permissions. Roles opens a
+  searchable catalog with display names, role handles, descriptions, and system
+  role labels. Each role uses one row with its active human member count and
+  its explicit grant and denial counts across all scopes. The implicit
+  `everyone` membership includes all active human accounts. Counts exclude
+  virtual owner access. Zero grants and denials show blank cells. Older servers
+  that omit counts show a dash.
+  Role managers can create roles and use row buttons to open metadata or
+  permissions. Role assigners can browse the list and open each role's roster.
+  Permissions opens the server-wide permission matrix and requires `role.manage`.
+- Role pages use `/manage/server/roles`. Earlier role URLs under
+  `/manage/server/permissions` redirect to the same role or section. Back and
+  successful deletion return to the Roles list.
+
+- The Edit Role page has Role, Members, and Permissions tabs. Each tab has
+  its own URL and supports browser history and direct links. Role contains
+  metadata, ping settings, and deletion. Members contains the assigned users;
+  for `everyone`, it explains automatic membership. Permissions contains the
+  role's permission matrix. Tabs require the same authority as their content.
+  Role assigners without `role.manage` open the roster. Leaving a changed role
+  form requires confirmation before the draft is discarded.
+
+- Administrative role responses contain metadata and optional aggregate counts.
+  Permission decisions belong to `AdminPermissionService`. The former
+  `AdminRole.permissions` and `AdminRole.permission_denials` fields are removed;
+  clients must use role matrix or decision reads, which require `role.manage`.
+  Role metadata and assignment-read access requirements stay the same.
+
 - Role details and assigned members are separate reads. Member lists load in
   bounded pages so large roles do not require every user profile at once.
   Roster access requires `role.assign`, not access to the full administrative
   user directory. Only explicit assignments appear; `everyone` has no roster.
   Pages reflect current assignments, so concurrent changes can shift offsets.
-  In the bundled frontend, `role.assign` also gives access to the role list
+  In the bundled frontend, `role.assign` also gives access to the Roles list
   and each role's roster. Without `role.manage`, the list is read-only and
-  shows no permission matrix, role editor, or role creation action. Roster
+  shows no role editor or role creation action. Roster
   rows link to member management only when the viewer has `admin.view-users`.
+
+- Role assigners can read one human user's explicit assignments and the roles
+  they may assign or revoke without access to administrative account details.
+  The read excludes verified emails and other private account fields. Limits
+  include scoped authority, configured-owner restrictions, and self-protection.
+  They are current hints: each command checks authority again. Tools read the
+  state again after assignment, revocation, or permission changes.
 
 - Every authenticated human user belongs to the implicit `everyone` role and may additionally hold one or more named roles. Bots inherit neither `everyone` nor named-role permissions.
 - The system roles are `owner`, `admin`, `moderator`, `everyone`. Role position controls ordering/display and legacy event compatibility; it is not an authorization rank.
@@ -100,8 +135,7 @@ the backend permission catalog. Update both catalogs together.
   read authority and includes `message.read-interactions`, which
   supplies authority for related threads only. The same read rules apply in
   DMs after the membership check. `message.post` separately
-  gates root-message posting and permits human users to start DMs. Bot accounts
-  cannot start DMs regardless of their permissions.
+  gates root-message posting and permits humans and bots to start DMs.
 - Server admins can drag-and-drop to reorder custom roles. System role positions are fixed for ordering consistency.
 - Custom role display names are limited to 80 bytes; descriptions are limited to 500 bytes.
 - Owners are always entitled to all permissions. The owner override becomes effective only while the human session has privileged mode active. Without it, an owner resolves through direct grants, other roles, and `everyone` like any other user. An effective owner has the durable `owner` role; verified users listed in `owners.emails` in `chatto.toml` are materialized into that role at boot or through retryable durable work after verification.
@@ -183,7 +217,7 @@ User-triggered RBAC events are audit facts as well as state facts, so their even
 
 ### 9. Defaults are one-time initialization, not startup policy
 
-**Decision:** Apply the current server default set only when the durable RBAC stream is empty. New groups and ordinary rooms store no default decisions. Commit a channel room and any exceptional default decisions in one atomic EVT batch: fresh announcements rooms deny `message.post` to `everyone` and allow it for `admin`. Do not reset existing permission state during startup. A new permission that
+**Decision:** Apply the current server default set only when the durable RBAC stream is empty. New groups and ordinary rooms store no default decisions. Commit a channel room and any exceptional default decisions in one atomic EVT batch: fresh announcements rooms deny `message.post` to `everyone` and allow it for `admin` and `owner`. Owners can thus post without privileged mode. Do not reset existing permission state during startup. A new permission that
 gates an existing capability gets a one-time upgrade grant (ADR-113):
 
 - Initialize each missing server-level `everyone` call permission once. Any
@@ -196,6 +230,12 @@ gates an existing capability gets a one-time upgrade grant (ADR-113):
 
 These grants preserve existing capabilities without undoing an operator's
 later decision.
+
+The invitation permission split also copies current server-scope `user.invite`
+allows and denies to `user.manage-invites` once. A historical decision for the
+new permission, including a clear, prevents another copy. The original decisions
+remain as non-privileged issuance grants or denials. Fresh admins receive both;
+everyone receives neither. See [FDR-036](FDR-036-invite-links.md).
 **Why:** Absence is a meaningful RBAC state. Reapplying code defaults on every startup makes an operator's explicit clear indistinguishable from incomplete bootstrap state.
 **Tradeoff:** Apart from the explicit upgrade grants above, adding a new code default does not grant it to existing servers or rooms automatically. Changes of meaning, such as `room.manage` for room-group managers, remain manual review items. Older replicas in a rolling deployment still use their historical non-atomic room-creation path until they are replaced.
 
@@ -240,11 +280,11 @@ The full permission catalog is in `cli/internal/core/permission.go`. Key permiss
   access to the complete thread. An effective `message.read` allow includes
   this permission. Fresh and upgraded servers store only the `message.read`
   grant for `everyone`.
-- `message.post` — post root messages and thread replies, and let human users start DMs.
+- `message.post` — post root messages and thread replies, and let humans and bots start DMs.
   Includes `message.post-in-thread` and `message.post-in-interactions`. A narrow
   deny cannot restrict an effective broad allow.
-  Bot accounts cannot start DMs. Fresh servers grant this permission to
-  `everyone` at server scope. Fresh announcement rooms replace that baseline
+  Bots need an explicit grant within their owner's authority. Fresh servers
+  grant this permission to `everyone` at server scope. Fresh announcement rooms replace that baseline
   with a room-level `everyone` deny and a room-level `admin` allow. Moderators
   and other named roles need their own room-level posting grant.
 - `message.post-in-thread` — reply in any readable thread where room policy permits it.

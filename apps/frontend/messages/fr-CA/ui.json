@@ -1,5 +1,6 @@
 {
   "ui": {
+    "help": "Aide",
     "toggle_sidebar": "Basculer la barre latérale",
     "notifications": "Notifications",
     "open_quick_switcher": "Ouvrir le sélecteur rapide",
@@ -7,7 +8,6 @@
     "realtime_paused": "Les mises à jour en temps réel ont été suspendues. Reconnexion...",
     "update_available": "Une nouvelle version est disponible",
     "reload": "Recharger",
-    "sign_out": "Déconnecter",
     "close": "Fermer",
     "auth_status": {
       "origin_title": "La session expirée",
@@ -65,12 +65,14 @@
       "loading": "Chargement..."
     },
     "image_modal": {
+      "open_larger": "Agrandir",
       "previous": "Image précédente",
       "next": "Image suivante",
       "fallback_alt": "Image",
       "zoom_in": "Agrandir",
       "zoom_out": "Réduire",
       "fit": "Ajuster",
+      "pause_animation": "Mettre l'animation en pause",
       "details": "Détails",
       "file_type": "Type de fichier"
     },

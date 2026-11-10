@@ -12,6 +12,7 @@ import {
 import type { ServerConnection } from '../server/serverConnection.js';
 import type { UserAvatarUserView } from '../timeline/users.js';
 import { getUserStore, type UserStore } from '../server/users.js';
+import { MentionLookups } from './mentionLookups.js';
 
 export const ROOM_MEMBERS_PAGE_SIZE = 250;
 const MENTION_MEMBER_SEARCH_LIMIT = 10;
@@ -34,12 +35,25 @@ function memberMatchesSearch(member: RoomMember, search: string): boolean {
   );
 }
 
+/** Exact, case-insensitive mention match against a live profile. */
+function memberMatchesMention(member: RoomMember, handle: string): boolean {
+  return (
+    !member.deleted &&
+    (member.login.toLowerCase() === handle || member.displayName.toLowerCase() === handle)
+  );
+}
+
 function pageIds(page: MemberDirectoryPage): string[] {
   return page.memberIds ?? page.members.map((member) => member.id);
 }
 
 /** Optional collaborators of a {@link RoomMembersStore}. */
 export type RoomMembersStoreOptions = {
+  /** Read reactive access state: whether the viewer's room access is ready for mention reads. */
+  canResolveMentions?: () => boolean;
+  /** Keep authorized results visible while recovery defers new reads.
+   * Defaults to the read gate when the host does not distinguish these states. */
+  canDisplayMentions?: () => boolean;
   /** The server's presence owner, which receives fresh presence from preview reads. */
   presence?: ServerPresence | null;
   /**
@@ -60,6 +74,41 @@ export type RoomMembersStoreOptions = {
  * its loading state is complete.
  */
 export class RoomMembersStore {
+  readonly #mentions: MentionLookups;
+  readonly #canDisplayMentions: () => boolean;
+  readonly #mentionMembersComputed = computed(() => {
+    // Keep the data dependencies even while access is deferred. Snapshot
+    // recovery can complete between reads without a reactive access flag.
+    const ids = [...new Set([...(this.#projected ?? this.#memberIds), ...this.#mentions.ids])];
+    return this.#canDisplayMentions() ? this.resolveIds(ids) : [];
+  });
+
+  /** Known directory members plus users resolved for visible mentions. */
+  get mentionMembers(): RoomMember[] {
+    return this.#mentionMembersComputed.get();
+  }
+
+  /** Retain only the handles in visible content; does not request the directory. */
+  retainMentions(handles: readonly string[]): () => void {
+    return this.#mentions.retain(handles);
+  }
+
+  /** Resume visible mention reads after access or recovery checks finish. */
+  resumeMentions(): void {
+    this.#mentions.resume();
+  }
+
+  /** Recheck retained handles after a recovery gap without removing their display. */
+  refreshMentions(minimumCursor?: string): void {
+    this.#minimumCursor = minimumCursor ?? this.#minimumCursor;
+    this.#mentions.invalidate({ retainResults: true });
+    this.#mentions.resume();
+  }
+  #listRequested = false;
+  /** A full list was requested, independently of bounded mention searches. Survives recovery. */
+  get hasRequestedList(): boolean {
+    return this.#listRequested;
+  }
   readonly #projectedMemberIds: () => readonly string[] | null;
   /**
    * The complete membership from the realtime projection, or null when the
@@ -203,6 +252,12 @@ export class RoomMembersStore {
     this.roomId = roomId;
     this.#presence = options.presence ?? null;
     this.#projectedMemberIds = options.projectedMemberIds ?? (() => null);
+    const canResolveMentions = options.canResolveMentions ?? (() => true);
+    this.#canDisplayMentions = options.canDisplayMentions ?? canResolveMentions;
+    this.#mentions = new MentionLookups(
+      (handle, signal) => this.lookupMention(handle, signal),
+      canResolveMentions
+    );
     if (!source) {
       this.api = null;
     } else if ('listRoomMembers' in source) {
@@ -211,6 +266,39 @@ export class RoomMembersStore {
       this.api = source.getAPI(createMemberDirectoryAPI);
       if (source.serverId) this.#users = getUserStore(source.serverId, source.queryScope);
     }
+  }
+
+  /** Search only matching pages; a substring match is not itself a valid mention. */
+  private async lookupMention(handle: string, signal: AbortSignal): Promise<string | null> {
+    const matches = (member: RoomMember) =>
+      this.#membershipChanges.get(member.id) !== false && memberMatchesMention(member, handle);
+    const known = this.members.find(matches);
+    if (known) return known.id;
+    if (this.hasLoadedAll || !this.api || !this.roomId) return null;
+    let offset = 0;
+    while (!signal.aborted) {
+      let page: MemberDirectoryPage;
+      try {
+        page = await this.api.listRoomMembers(this.roomId, handle, ROOM_MEMBERS_PAGE_SIZE, offset, {
+          signal,
+          minimumCursor: this.#minimumCursor
+        });
+      } catch (error) {
+        // An access denial removes a retained match. A transport failure keeps
+        // the last authorized result until the next recovery can recheck it.
+        if (isConnectCode(error, Code.PermissionDenied) || isConnectCode(error, Code.NotFound))
+          return null;
+        throw error;
+      }
+      signal.throwIfAborted();
+      this.recordPageProfiles(page.members);
+      const match = this.resolveIds(pageIds(page)).find(matches);
+      if (match) return match.id;
+      const consumed = page.consumedCount ?? pageIds(page).length;
+      if (!page.hasMore || !consumed) return null;
+      offset += consumed;
+    }
+    return null;
   }
 
   get filteredMembers(): RoomMember[] {
@@ -256,8 +344,11 @@ export class RoomMembersStore {
     }
   }
 
-  ensureLoaded(): void {
+  /** Request the directory; defer its read while the server verifies access. */
+  ensureLoaded({ defer = false }: { defer?: boolean } = {}): void {
+    this.#listRequested = true;
     if (
+      defer ||
       !this.roomId ||
       this.isInitialLoading ||
       this.isBackgroundLoading ||
@@ -278,30 +369,9 @@ export class RoomMembersStore {
     }
   }
 
-  async loadInitial(): Promise<void> {
-    // The projection has the complete membership, so a server read adds nothing.
-    if (this.#disposed || !this.roomId || !this.api || this.#projected !== null) return;
-    const loadId = ++this.#loadId;
-    this.#isInitialLoading = true;
-    this.#fullScanFinished = false;
-    this.#previewIds.clear();
-    this.#isBackgroundLoading = false;
-    this.#loadError = null;
-    this.loadOnlinePreview(loadId);
-    try {
-      await this.loadPages(loadId);
-    } catch (error) {
-      if (loadId === this.#loadId) {
-        this.#loadError = error;
-        console.error('Failed to load room members:', error);
-      }
-    } finally {
-      if (loadId === this.#loadId) {
-        this.#fullScanFinished = true;
-        this.#isInitialLoading = false;
-        this.#isBackgroundLoading = false;
-      }
-    }
+  /** Load or retry the list, keeping an existing first page visible during the read. */
+  loadInitial(): Promise<void> {
+    return this.refresh();
   }
 
   /** Recheck membership after a projection change, at or beyond its cursor. */
@@ -312,7 +382,9 @@ export class RoomMembersStore {
     reauthorize?: boolean;
     minimumCursor?: string;
   } = {}): Promise<void> {
+    this.#listRequested = true;
     if (this.#disposed || !this.roomId || !this.api || this.#projected !== null) return;
+    this.#mentions.invalidate({ retainResults: !reauthorize });
     this.#minimumCursor = minimumCursor ?? this.#minimumCursor;
     const loadId = ++this.#loadId;
     this.#isInitialLoading = !this.#hasFirstPage;
@@ -345,13 +417,15 @@ export class RoomMembersStore {
         this.#fullScanFinished = true;
         this.#isInitialLoading = false;
         this.#isBackgroundLoading = false;
+        this.#mentions.resume();
       }
     }
   }
 
+  /** Search a bounded page without requesting the directory. Empty text supplies bare-@ suggestions. */
   async searchMembers(search: string, limit = MENTION_MEMBER_SEARCH_LIMIT): Promise<RoomMember[]> {
     const normalizedSearch = search.trim();
-    if (!normalizedSearch || this.hasLoadedAll || this.#disposed || !this.roomId || !this.api) {
+    if (this.hasLoadedAll || this.#disposed || !this.roomId || !this.api) {
       return this.filteredLoadedMembers(normalizedSearch, limit);
     }
 
@@ -405,24 +479,36 @@ export class RoomMembersStore {
     }
   }
 
-  /** Standalone fixtures receive profile changes here; connected rooms use UserStore. */
+  /** Profiles already live in UserStore for connected rooms. Only changed handle
+   * matches need new lookups; presence and unrelated profiles keep their results. */
   updateUsers(users: DirectoryMember[]): void {
     this.#searchCache.clear();
-    if (this.#users) return;
-    for (const user of users) {
-      this.#standaloneProfiles.set(user.id, {
-        member: user,
-        fromRealtime: true
-      });
-    }
-    if (this.#hasLoadedAll) {
+    const byId = new Map(users.map((user) => [user.id, user]));
+    const handles = new Set(
+      users
+        .filter((user) => !user.deleted)
+        .flatMap((user) => [user.login.toLowerCase(), user.displayName.toLowerCase()])
+    );
+    this.#mentions.invalidate({
+      affected: (handle, result) => {
+        const user = result ? byId.get(result) : undefined;
+        return user ? !memberMatchesMention(user, handle) : !result && handles.has(handle);
+      }
+    });
+    if (!this.#users) {
       for (const user of users) {
-        if (this.#membershipChanges.get(user.id) && !this.#memberIds.includes(user.id)) {
+        this.#standaloneProfiles.set(user.id, { member: user, fromRealtime: true });
+        if (
+          this.#hasLoadedAll &&
+          this.#membershipChanges.get(user.id) &&
+          !this.#memberIds.includes(user.id)
+        ) {
           this.#memberIds = [...this.#memberIds, user.id];
           this.#totalCount++;
         }
       }
     }
+    this.#mentions.resume();
   }
 
   /** Apply membership deltas even while this room is not mounted. A delta
@@ -433,6 +519,7 @@ export class RoomMembersStore {
     this.#membershipChanges.set(userId, joined);
     if (!joined && !this.#users) this.#standaloneProfiles.delete(userId);
     this.#searchCache.clear();
+    this.#mentions.invalidate();
     if (this.#isInitialLoading || this.#isBackgroundLoading) {
       await this.refresh();
       return;
@@ -441,8 +528,10 @@ export class RoomMembersStore {
     if (!joined) {
       this.#memberIds = this.#memberIds.filter((id) => id !== userId);
       if (exists) this.#totalCount = Math.max(0, this.#totalCount - 1);
+      this.#mentions.resume();
       return;
     }
+    this.#mentions.resume();
     if (exists || !this.#hasFirstPage) return;
     if (this.#users) {
       // Realtime owns profile hydration. Membership can publish its ID now.
@@ -469,8 +558,9 @@ export class RoomMembersStore {
   }
 
   /** Discard snapshots after a recovery gap or an authorization boundary. */
-  resetProjectionState(): void {
+  resetProjectionState(minimumCursor?: string): void {
     this.reset();
+    this.#minimumCursor = minimumCursor;
   }
 
   /**
@@ -479,6 +569,7 @@ export class RoomMembersStore {
    */
   dispose(): void {
     this.#disposed = true;
+    this.#mentions.dispose();
     this.#loadId++;
   }
 
@@ -599,6 +690,7 @@ export class RoomMembersStore {
   }
 
   private reset(): void {
+    this.#mentions.invalidate();
     this.#loadId++;
     this.#memberIds = [];
     this.#standaloneProfiles.clear();

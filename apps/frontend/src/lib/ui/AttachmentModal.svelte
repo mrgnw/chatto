@@ -4,6 +4,7 @@ Header, gallery controls and download stay outside the preview on all screens.
 -->
 <script lang="ts">
   import type { Snippet } from 'svelte';
+  import { provideImageControls } from './imageControlsContext';
   import { toInlineEndDelta } from '$lib/i18n/direction';
   import { m } from '$lib/i18n/messages';
   import { getLocale } from '$lib/i18n/runtime';
@@ -55,6 +56,8 @@ Header, gallery controls and download stay outside the preview on all screens.
   const descriptionId = $props.id();
   const detailsId = `${descriptionId}-details`;
   let detailsOpen = $state(false);
+  let imageControls: HTMLDivElement | undefined = $state();
+  provideImageControls(() => imageControls);
 
   function handleKeydown(event: KeyboardEvent) {
     if (count < 2 || event.defaultPrevented || event.altKey || event.ctrlKey || event.metaKey)
@@ -114,7 +117,7 @@ Header, gallery controls and download stay outside the preview on all screens.
       {/if}
       <div class="flex min-h-0 flex-1 flex-col gap-3 lg:flex-row">
         <div
-          class="flex min-h-0 min-w-0 flex-1 items-center justify-center overflow-hidden rounded-lg bg-black"
+          class="flex min-h-0 min-w-0 flex-1 items-center justify-center overflow-hidden rounded-lg bg-background"
         >
           {@render children()}
         </div>
@@ -174,8 +177,9 @@ Header, gallery controls and download stay outside the preview on all screens.
               ></span>
             </button>
           </nav>
-        {:else}<span></span>{/if}
-        <div class="flex items-center gap-3">
+        {/if}
+        <div bind:this={imageControls} class="flex items-center" data-image-controls></div>
+        <div class="ms-auto flex items-center gap-3">
           <button
             type="button"
             class="btn-secondary"

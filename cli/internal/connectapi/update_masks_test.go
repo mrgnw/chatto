@@ -12,6 +12,7 @@ import (
 	"connectrpc.com/connect"
 	"github.com/chattocorp/chatto/cli/internal/core"
 	apiv1 "github.com/chattocorp/chatto/cli/internal/pb/chatto/api/v1"
+	evtv1 "github.com/chattocorp/chatto/cli/internal/pb/chatto/core/evt/v1"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/reflect/protoreflect"
 	"google.golang.org/protobuf/reflect/protoregistry"
@@ -20,8 +21,6 @@ import (
 )
 
 func TestResourceUpdateMaskCoverage(t *testing.T) {
-	t.Parallel()
-
 	seen := map[protoreflect.FullName]bool{}
 	protoregistry.GlobalFiles.RangeFiles(func(file protoreflect.FileDescriptor) bool {
 		if file.Package() != "chatto.api.v1" && file.Package() != "chatto.admin.v1" {
@@ -44,7 +43,16 @@ func TestResourceUpdateMaskCoverage(t *testing.T) {
 					values = desc.Fields().ByName(spec.container).Message()
 				}
 				for name := range strings.FieldsSeq(spec.fields) {
-					require.NotNil(t, values.Fields().ByName(protoreflect.Name(name)), "%s.%s", desc.FullName(), name)
+					leaf := values
+					parts := strings.Split(name, ".")
+					for i, part := range parts {
+						field := leaf.Fields().ByName(protoreflect.Name(part))
+						require.NotNil(t, field, "%s.%s", desc.FullName(), name)
+						if i < len(parts)-1 {
+							leaf = field.Message()
+							require.NotNil(t, leaf, "%s.%s must have message parents", desc.FullName(), name)
+						}
+					}
 				}
 				// Every endpoint supports wildcard expansion and rejects an explicit empty mask.
 				request := dynamicpb.NewMessage(desc)
@@ -62,9 +70,34 @@ func TestResourceUpdateMaskCoverage(t *testing.T) {
 	require.Len(t, seen, len(updateMaskSpecs), "mask registry must contain only mounted resource updates")
 }
 
-func TestUpdateMaskSelectionAndIsolation(t *testing.T) {
-	t.Parallel()
+func TestRoomMembershipEventsUpdateMask(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		value *bool
+		mask  []string
+		want  *bool
+	}{
+		{"false", new(false), []string{"show_membership_events"}, new(false)},
+		{"reset", nil, []string{"show_membership_events"}, new(true)},
+		{"unselected", new(false), []string{"description"}, nil},
+		{"inferred", new(false), nil, new(false)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			request := &apiv1.UpdateRoomRequest{RoomId: "room", ShowMembershipEvents: test.value}
+			if test.mask != nil {
+				request.UpdateMask = &fieldmaskpb.FieldMask{Paths: test.mask}
+			}
+			masked, err := normalizeUpdateMask(request)
+			require.NoError(t, err)
+			require.Equal(t, test.want, masked.ShowMembershipEvents)
+			// Interceptor and handler both normalize; defaults must remain stable.
+			require.NoError(t, applyUpdateMask(masked))
+			require.Equal(t, test.want, masked.ShowMembershipEvents)
+		})
+	}
+}
 
+func TestUpdateMaskSelectionAndIsolation(t *testing.T) {
 	request := &apiv1.UpdateSettingsRequest{Timezone: new("Europe/Berlin"), ShareTimezone: new(true), UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"share_timezone", "share_timezone"}}}
 	masked, err := normalizeUpdateMask(request)
 	require.NoError(t, err)
@@ -85,8 +118,6 @@ func TestUpdateMaskSelectionAndIsolation(t *testing.T) {
 // mask must survive to distinguish a reset from an untouched field. Invalid
 // unselected values must be removed before protobuf and domain validation.
 func TestResourceUpdatesThroughJSON(t *testing.T) {
-	t.Parallel()
-
 	env := newConnectAPITestEnv(t)
 	mux := http.NewServeMux()
 	for _, handler := range env.api.Handlers() {
@@ -139,8 +170,28 @@ func TestResourceUpdatesThroughJSON(t *testing.T) {
 	call("api.v1.UserService", "UpdateUserProfile", `{"userId":"`+env.viewer.Id+`","updateMask":"login"}`, 400)
 	require.NoError(t, env.core.GrantServerPermission(env.ctx, core.SystemActorID, core.RoleEveryone, core.PermServerManage))
 	admin := "admin.v1.AdminServerService"
+	call(admin, "UpdateServerConfig", `{"serverName":"Policy test","registration":{"admission":"ACCOUNT_CREATION_POLICY_INVITE_ONLY"}}`, 200)
+	result := call(admin, "UpdateServerConfig", `{"description":"Updated profile","registration":{"admission":999},"updateMask":"description"}`, 200)
+	config := result["config"].(map[string]any)
+	require.Equal(t, "Policy test", config["serverName"])
+	require.Equal(t, "ACCOUNT_CREATION_POLICY_INVITE_ONLY", config["registration"].(map[string]any)["admission"])
+	result = call(admin, "UpdateServerConfig", `{"updateMask":"registration.admission"}`, 200)
+	config = result["config"].(map[string]any)
+	require.Equal(t, "ACCOUNT_CREATION_POLICY_OPEN", config["registration"].(map[string]any)["admission"])
+	require.Equal(t, "Policy test", config["serverName"])
+	require.Equal(t, "Updated profile", config["description"])
+	call(admin, "UpdateServerConfig", `{"registration":{"admission":999},"updateMask":"registration.admission"}`, 400)
+	call(admin, "UpdateServerConfig", `{"registration":{"admission":"ACCOUNT_CREATION_POLICY_INVITE_ONLY"},"updateMask":"registration"}`, 400)
 	call(admin, "UpdateBlockedUsernames", `{"blockedUsernames":["blocked-name"],"updateMask":"blockedUsernames"}`, 200)
-	result := call(admin, "UpdateBlockedUsernames", `{"blockedUsernames":[],"updateMask":"blockedUsernames"}`, 200)
+	result = call(admin, "UpdateBlockedUsernames", `{"blockedUsernames":[],"updateMask":"blockedUsernames"}`, 200)
+
+	const oauthClientID = "https://example.com/client.json"
+	require.NoError(t, env.core.RecordOAuthClientAuthorization(env.ctx, env.viewer.Id, oauthClientID, "Example", "https://example.com", "https://example.com", evtv1.OAuthClientSource_OAUTH_CLIENT_SOURCE_CIMD))
+	oauth := "admin.v1.AdminOAuthClientService"
+	call(oauth, "UpdateOAuthClientPolicy", `{"clientId":"https://example.com/client.json","policy":"OAUTH_CLIENT_POLICY_TRUSTED","updateMask":"policy"}`, 200)
+	reset := call(oauth, "UpdateOAuthClientPolicy", `{"clientId":"https://example.com/client.json","policy":null,"updateMask":"policy"}`, 200)
+	require.Equal(t, "OAUTH_CLIENT_POLICY_DEFAULT", reset["oauthClient"].(map[string]any)["policy"])
+	call(oauth, "UpdateOAuthClientPolicy", `{"clientId":"https://example.com/client.json"}`, 400)
 	require.Empty(t, result["blockedUsernames"])
 	policy := "api.v1.NotificationPolicyService"
 	call(policy, "UpdateNotificationPolicy", `{"scope":{"server":{}},"overrides":{"directMessages":"NOTIFICATION_DELIVERY_MODE_OFF","replies":"NOTIFICATION_DELIVERY_MODE_IN_APP_NOTIFICATION"},"updateMask":"directMessages,replies"}`, 200)
@@ -151,8 +202,6 @@ func TestResourceUpdatesThroughJSON(t *testing.T) {
 }
 
 func TestMyAccountProfileMaskBatch(t *testing.T) {
-	t.Parallel()
-
 	env := newConnectAPITestEnv(t)
 	ctx := withCaller(env.ctx, env.viewer)
 	_, err := env.core.CreateUser(env.ctx, core.SystemActorID, "taken-login", "Other", "password")
@@ -210,8 +259,6 @@ func TestMyAccountProfileMaskBatch(t *testing.T) {
 // Two simultaneous self-service renames must not both spend the same cooldown
 // allowance, and the losing request must not leave its other fields behind.
 func TestMyAccountProfileConcurrentMasks(t *testing.T) {
-	t.Parallel()
-
 	env := newConnectAPITestEnv(t)
 	ctx := withCaller(env.ctx, env.viewer)
 	start := make(chan struct{})

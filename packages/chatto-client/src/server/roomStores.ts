@@ -3,6 +3,7 @@ import { MessagesStore } from '../room/messages/MessagesStore.js';
 import { RoomFilesStore } from '../room/files.js';
 import { RoomMembersStore } from '../room/members.js';
 import { RoomPinsStore } from '../room/pins.js';
+import { RoomNoticeStore } from '../room/notice.js';
 import { clearRoomPinsSeenMarker } from '../room/pins.js';
 import type { ServerPresence } from './presence.js';
 import type { ServerConnection } from './serverConnection.js';
@@ -12,12 +13,13 @@ export type LoadedRoomStores = {
   readonly messages?: MessagesStore;
   readonly files?: RoomFilesStore;
   readonly pins?: RoomPinsStore;
+  readonly notice?: RoomNoticeStore;
   readonly members?: RoomMembersStore;
   /** Thread timelines by thread root event ID. */
   readonly threads: Readonly<Record<string, MessagesStore>>;
 };
 
-type StoreKind = 'messages' | 'files' | 'pins' | 'members';
+type StoreKind = 'messages' | 'files' | 'pins' | 'members' | 'notice';
 
 /**
  * The number of most recently used rooms whose stores a registry keeps. The
@@ -63,7 +65,7 @@ type ThreadLocation = { roomId: string; threadRootEventId: string };
 /** The part of {@link RoomStores} that components use: the store accessors. */
 export type RoomStoreAccess = Pick<
   RoomStores,
-  'messages' | 'thread' | 'files' | 'pins' | 'members'
+  'messages' | 'thread' | 'files' | 'pins' | 'members' | 'notice'
 >;
 
 /** What {@link RoomStores} needs from its server. */
@@ -77,6 +79,10 @@ export type RoomStoresOptions = {
   viewerId: () => string | null;
   /** The complete member IDs of a room from the realtime projection, or null. */
   projectedMemberIds: (roomId: string) => readonly string[] | null;
+  /** Gate mention lookups while room authority is absent or being checked. */
+  canResolveMentions?: (roomId: string) => boolean;
+  /** Gate retained mention display independently of recovery reads. */
+  canDisplayMentions?: (roomId: string) => boolean;
   /** The number of recently used rooms and threads to keep; see {@link KeepRecent}. */
   keepRecent?: KeepRecent;
 };
@@ -204,6 +210,7 @@ export class RoomStores {
       !entry.messages &&
       !entry.files &&
       !entry.pins &&
+      !entry.notice &&
       !entry.members &&
       !Object.keys(entry.threads).length
     );
@@ -221,6 +228,8 @@ export class RoomStores {
     entry.pins = undefined;
     entry.members?.dispose();
     entry.members = undefined;
+    entry.notice?.dispose();
+    entry.notice = undefined;
     if (this.#isEmpty(entry)) delete this.#rooms[roomId];
   }
 
@@ -239,12 +248,23 @@ export class RoomStores {
     ));
   }
 
+  /** The current member-only notice. Loads while a consumer retains it. */
+  notice(roomId: string): RoomNoticeStore {
+    return (this.#usedRoom(roomId).notice ??= new RoomNoticeStore(
+      this.#options.connection,
+      roomId
+    ));
+  }
+
   /** The member list of one room. */
   members(roomId: string): RoomMembersStore {
     const entry = this.#usedRoom(roomId);
     if (entry.members) return entry.members;
+    const canDisplayMentions = this.#options.canDisplayMentions;
     return (entry.members = new RoomMembersStore(roomId, this.#options.connection, {
       presence: this.#options.presence,
+      canResolveMentions: () => this.#options.canResolveMentions?.(roomId) ?? true,
+      canDisplayMentions: canDisplayMentions ? () => canDisplayMentions(roomId) : undefined,
       projectedMemberIds: () => this.#options.projectedMemberIds(roomId)
     }));
   }
@@ -296,6 +316,7 @@ export class RoomStores {
   resetHandlers(): (() => void)[] {
     return [
       ...this.all('members').map((store) => () => store.resetProjectionState()),
+      ...this.all('notice').map((store) => () => store.reset()),
       ...this.timelines().map((store) => () => store.resetProjectionState()),
       ...this.all('files').map((store) => () => store.reset({ rehydrateRetained: true })),
       ...this.all('pins').map((store) => () => store.reset({ rehydrateRetained: true }))
@@ -310,6 +331,7 @@ export class RoomStores {
       entry.members?.dispose();
       this.#disposeTimelines(entry);
       entry.files?.dispose();
+      entry.notice?.dispose();
     }
     this.#rooms = Object.create(null);
     this.#recentRooms.clear();

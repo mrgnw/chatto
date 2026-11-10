@@ -1,5 +1,6 @@
 {
   "ui": {
+    "help": "Help",
     "toggle_sidebar": "Toggle sidebar",
     "notifications": "Notifications",
     "open_quick_switcher": "Open quick switcher",
@@ -7,7 +8,6 @@
     "realtime_paused": "Real-time updates paused. Reconnecting...",
     "update_available": "A new version is available",
     "reload": "Reload",
-    "sign_out": "Sign out",
     "close": "Close",
     "auth_status": {
       "origin_title": "Session expired",
@@ -65,12 +65,14 @@
       "loading": "Loading..."
     },
     "image_modal": {
+      "open_larger": "Open larger",
       "previous": "Previous image",
       "next": "Next image",
       "fallback_alt": "Image",
       "zoom_in": "Zoom in",
       "zoom_out": "Zoom out",
       "fit": "Fit",
+      "pause_animation": "Pause animation",
       "details": "Details",
       "file_type": "File type"
     },

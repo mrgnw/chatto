@@ -369,6 +369,14 @@ func setupTestHTTPServer(t *testing.T) (*httptest.Server, *http.Client, *core.Ch
 
 func setupTestHTTPServerWithHook(t *testing.T, configure func(*HTTPServer)) (*httptest.Server, *http.Client, *core.ChattoCore) {
 	t.Helper()
+	ts, client, c, _ := setupTestHTTPServerWithLifecycle(t, configure)
+	return ts, client, c
+}
+
+// setupTestHTTPServerWithLifecycle also exposes an idempotent stop function for
+// fault tests that must stop core workers before closing their dependencies.
+func setupTestHTTPServerWithLifecycle(t *testing.T, configure func(*HTTPServer)) (*httptest.Server, *http.Client, *core.ChattoCore, func()) {
+	t.Helper()
 	gin.SetMode(gin.TestMode)
 
 	_, nc := testutil.StartSharedNATS(t)
@@ -381,7 +389,7 @@ func setupTestHTTPServerWithHook(t *testing.T, configure func(*HTTPServer)) (*ht
 	if err != nil {
 		t.Fatalf("Failed to create ChattoCore: %v", err)
 	}
-	startCoreServices(t, chattoCore)
+	stop := testutil.StartService(t, "ChattoCore", chattoCore.Run, chattoCore.WaitForBoot)
 
 	// Create router with session middleware
 	router := gin.New()
@@ -432,7 +440,7 @@ func setupTestHTTPServerWithHook(t *testing.T, configure func(*HTTPServer)) (*ht
 		},
 	}
 
-	return ts, client, chattoCore
+	return ts, client, chattoCore, stop
 }
 
 func postBrowserAuthentication(client *http.Client, endpoint string, body []byte) (*http.Response, error) {
@@ -542,9 +550,8 @@ func setTestServerName(t *testing.T, ctx context.Context, chattoCore *core.Chatt
 // ============================================================================
 
 func TestAuthRoutes_InviteOnlyRegistration(t *testing.T) {
-	ts, client, chattoCore, mockMailer := setupTestHTTPServerWithMailerAuthConfig(t, config.AuthConfig{
-		AccountCreationPolicy: config.AccountCreationPolicyInviteOnly,
-	})
+	ts, client, chattoCore, mockMailer := setupTestHTTPServerWithMailerAuthConfig(t, config.AuthConfig{})
+	setTestRegistrationAdmission(t, chattoCore, true)
 	ctx := testContext(t)
 	admin, err := chattoCore.CreateUser(ctx, core.SystemActorID, "http-invite-admin", "HTTP Invite Admin", "password123")
 	if err != nil {
@@ -553,17 +560,17 @@ func TestAuthRoutes_InviteOnlyRegistration(t *testing.T) {
 	if err := chattoCore.AssignAdminRole(ctx, admin.Id); err != nil {
 		t.Fatalf("AssignAdminRole: %v", err)
 	}
-	maxUses := uint32(1)
-	invitation, err := chattoCore.CreateInvitation(ctx, admin.Id, &maxUses, nil)
+	invitation, err := chattoCore.CreateInvitationCode(ctx, admin.Id, "")
 	if err != nil {
 		t.Fatalf("CreateInvitation: %v", err)
 	}
-	invitePath := chattoCore.InvitationLinkPath(invitation.ID)
+	admissionID := ""
 
 	postRegistration := func() (int, string) {
 		t.Helper()
 		body, _ := json.Marshal(map[string]string{
-			"email": "invited@example.test",
+			"email":       "invited@example.test",
+			"admissionId": admissionID,
 		})
 		resp, err := client.Post(ts.URL+"/auth/register", "application/json", bytes.NewReader(body))
 		if err != nil {
@@ -576,44 +583,16 @@ func TestAuthRoutes_InviteOnlyRegistration(t *testing.T) {
 
 	missingStatus, _ := postRegistration()
 	if missingStatus != http.StatusBadRequest {
-		t.Fatalf("registration without invite link status = %d, want %d", missingStatus, http.StatusBadRequest)
+		t.Fatalf("registration without invitation code status = %d, want %d", missingStatus, http.StatusBadRequest)
 	}
 
-	invalidResp, err := client.Get(ts.URL + "/invite/not-a-valid-token")
-	if err != nil {
-		t.Fatalf("GET invalid invite link: %v", err)
-	}
-	invalidResp.Body.Close()
-	if invalidResp.StatusCode != http.StatusSeeOther || invalidResp.Header.Get("Location") != "/register?error=invalid_invitation" {
-		t.Fatalf("invalid invite link = %d %q", invalidResp.StatusCode, invalidResp.Header.Get("Location"))
-	}
-
-	tamperedPath := invitePath[:len(invitePath)-1] + "A"
-	if invitePath[len(invitePath)-1] == 'A' {
-		tamperedPath = invitePath[:len(invitePath)-1] + "B"
-	}
-	tamperedResp, err := client.Get(ts.URL + tamperedPath)
-	if err != nil {
-		t.Fatalf("GET tampered invite link: %v", err)
-	}
-	tamperedResp.Body.Close()
-	if tamperedResp.StatusCode != http.StatusSeeOther || tamperedResp.Header.Get("Location") != "/register?error=invalid_invitation" {
-		t.Fatalf("tampered invite link = %d %q", tamperedResp.StatusCode, tamperedResp.Header.Get("Location"))
-	}
-
-	inviteResp, err := client.Get(ts.URL + invitePath)
-	if err != nil {
-		t.Fatalf("GET valid invite link: %v", err)
-	}
-	inviteResp.Body.Close()
-	if inviteResp.StatusCode != http.StatusSeeOther || inviteResp.Header.Get("Location") != "/register?invited=1" {
-		t.Fatalf("valid invite link = %d %q", inviteResp.StatusCode, inviteResp.Header.Get("Location"))
-	}
-	if inviteResp.Header.Get("Cache-Control") != "no-store" || inviteResp.Header.Get("Referrer-Policy") != "no-referrer" || inviteResp.Header.Get("X-Robots-Tag") != "noindex, nofollow" {
-		t.Fatalf("valid invite-link privacy headers = %v", inviteResp.Header)
-	}
+	admissionID = acceptTestInvitation(t, client, ts.URL, chattoCore.InvitationCode(invitation.ID), "")["admissionId"]
 	if status, body := postRegistration(); status != http.StatusOK {
 		t.Fatalf("valid invitation registration status = %d: %s", status, body)
+	}
+	// A resend must keep the same admission until the account is committed.
+	if status, body := postRegistration(); status != http.StatusOK {
+		t.Fatalf("invited resend status = %d: %s", status, body)
 	}
 
 	message := mockMailer.LastMessage()
@@ -650,23 +629,15 @@ func TestAuthRoutes_InviteOnlyRegistration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetInvitation: %v", err)
 	}
-	if state.UseCount != 1 {
-		t.Fatalf("invitation use count = %d, want 1", state.UseCount)
+	if !state.Used {
+		t.Fatalf("invitation used = %t, want true", state.Used)
 	}
 }
 
-func TestAuthRoutes_OpenRegistrationIgnoresInviteLinks(t *testing.T) {
+func TestAuthRoutes_OpenRegistrationWithoutInvitation(t *testing.T) {
 	ts, client, _, mockMailer := setupTestHTTPServerWithMailer(t)
-	inviteResp, err := client.Get(ts.URL + "/invite/not-a-valid-token")
-	if err != nil {
-		t.Fatalf("GET invite link: %v", err)
-	}
-	inviteResp.Body.Close()
-	if inviteResp.StatusCode != http.StatusSeeOther || inviteResp.Header.Get("Location") != "/register" {
-		t.Fatalf("open-mode invite link = %d %q", inviteResp.StatusCode, inviteResp.Header.Get("Location"))
-	}
 	body, _ := json.Marshal(map[string]string{
-		"email": "open-with-link@example.test",
+		"email": "open-registration@example.test",
 	})
 	resp, err := client.Post(ts.URL+"/auth/register", "application/json", bytes.NewReader(body))
 	if err != nil {
@@ -1045,13 +1016,13 @@ func TestAuthRoutes_BrowserSessionRenewalKeepsHandleAndExtendsWindow(t *testing.
 	}
 }
 
-func TestAuthRoutes_MigratesPreviousBrowserCookieOnce(t *testing.T) {
+func TestAuthRoutes_RejectsPreviousBrowserCookie(t *testing.T) {
 	var legacySessionID string
 	ts, client, chattoCore := setupTestHTTPServerWithHook(t, func(server *HTTPServer) {
 		server.router.Use(server.csrfMiddleware())
 		server.router.GET("/test/set-legacy-browser-cookie", func(c *gin.Context) {
 			session := sessions.Default(c)
-			session.Set(sessionKeyRuntimeCredentialID, legacySessionID)
+			session.Set("runtime_credential_id", legacySessionID)
 			if err := session.Save(); err != nil {
 				c.Status(http.StatusInternalServerError)
 				return
@@ -1069,13 +1040,6 @@ func TestAuthRoutes_MigratesPreviousBrowserCookieOnce(t *testing.T) {
 				return
 			}
 			c.JSON(http.StatusOK, gin.H{"userId": credential.auth.UserID})
-		})
-		server.router.GET("/test/legacy-browser-cookie", func(c *gin.Context) {
-			if _, ok := legacyCookieSessionID(sessions.Default(c)); ok {
-				c.Status(http.StatusOK)
-				return
-			}
-			c.Status(http.StatusNoContent)
 		})
 	})
 	ctx := testContext(t)
@@ -1096,19 +1060,6 @@ func TestAuthRoutes_MigratesPreviousBrowserCookieOnce(t *testing.T) {
 	if seedResponse.StatusCode != http.StatusNoContent {
 		t.Fatalf("set legacy browser cookie status = %d, want 204", seedResponse.StatusCode)
 	}
-	requestURL, err := url.Parse(ts.URL + "/auth/browser/session/migrate")
-	if err != nil {
-		t.Fatalf("Parse migration URL: %v", err)
-	}
-	staleCookieName, err := newBrowserSessionCookieName()
-	if err != nil {
-		t.Fatalf("newBrowserSessionCookieName: %v", err)
-	}
-	client.Jar.SetCookies(requestURL, []*http.Cookie{{
-		Name:  staleCookieName,
-		Value: "revoked-handle",
-		Path:  "/",
-	}})
 	beforeResponse, err := client.Get(ts.URL + "/test/browser-user")
 	if err != nil {
 		t.Fatalf("check legacy browser cookie: %v", err)
@@ -1118,89 +1069,19 @@ func TestAuthRoutes_MigratesPreviousBrowserCookieOnce(t *testing.T) {
 		t.Fatalf("ordinary authentication accepted legacy cookie with status %d", beforeResponse.StatusCode)
 	}
 
-	migrateResponse, err := postBrowserAuthentication(client, ts.URL+"/auth/browser/session/migrate", []byte("{}"))
+	response, err := postBrowserAuthentication(client, ts.URL+"/auth/browser/session/migrate", []byte("{}"))
 	if err != nil {
-		t.Fatalf("migrate legacy browser cookie: %v", err)
+		t.Fatalf("request removed migration route: %v", err)
 	}
-	migrateResponse.Body.Close()
-	if migrateResponse.StatusCode != http.StatusNoContent {
-		t.Fatalf("migrate legacy browser cookie status = %d, want 204", migrateResponse.StatusCode)
-	}
-	if cacheControl := migrateResponse.Header.Get("Cache-Control"); !strings.Contains(cacheControl, "no-store") {
-		t.Fatalf("migration Cache-Control = %q, want no-store", cacheControl)
-	}
-
-	var migratedHandle, csrfToken string
-	authCookieCount := 0
-	for _, cookie := range client.Jar.Cookies(migrateResponse.Request.URL) {
-		switch {
-		case isBrowserSessionCookieName(cookie.Name):
-			authCookieCount++
-			migratedHandle = cookie.Value
-		case cookie.Name == csrfCookieName:
-			csrfToken = cookie.Value
-		}
-	}
-	if authCookieCount != 1 || migratedHandle != legacySessionID || csrfToken == "" {
-		t.Fatalf("migrated browser cookies: count=%d handle=%q csrf=%t", authCookieCount, migratedHandle, csrfToken != "")
-	}
-
-	afterResponse, err := client.Get(ts.URL + "/test/browser-user")
-	if err != nil {
-		t.Fatalf("check migrated browser cookie: %v", err)
-	}
-	defer afterResponse.Body.Close()
-	if afterResponse.StatusCode != http.StatusOK {
-		t.Fatalf("migrated browser authentication status = %d, want 200", afterResponse.StatusCode)
-	}
-	var afterBody struct {
-		UserID string `json:"userId"`
-	}
-	if err := json.NewDecoder(afterResponse.Body).Decode(&afterBody); err != nil {
-		t.Fatalf("decode migrated browser user: %v", err)
-	}
-	if afterBody.UserID != user.GetId() {
-		t.Fatalf("migrated browser user = %q, want %q", afterBody.UserID, user.GetId())
-	}
-
-	legacyResponse, err := client.Get(ts.URL + "/test/legacy-browser-cookie")
-	if err != nil {
-		t.Fatalf("check retired legacy cookie field: %v", err)
-	}
-	legacyResponse.Body.Close()
-	if legacyResponse.StatusCode != http.StatusNoContent {
-		t.Fatalf("legacy authentication field remains after migration: status %d", legacyResponse.StatusCode)
-	}
-
-	retryResponse, err := postBrowserAuthentication(client, ts.URL+"/auth/browser/session/migrate", []byte("{}"))
-	if err != nil {
-		t.Fatalf("retry legacy browser migration: %v", err)
-	}
-	retryResponse.Body.Close()
-	if retryResponse.StatusCode != http.StatusNoContent {
-		t.Fatalf("retry legacy browser migration status = %d, want 204", retryResponse.StatusCode)
-	}
-}
-
-func TestAuthRoutes_BrowserSessionMigrationRequiresSameOriginProof(t *testing.T) {
-	ts, client, _ := setupTestHTTPServer(t)
-	req, err := http.NewRequest(http.MethodPost, ts.URL+"/auth/browser/session/migrate", strings.NewReader("{}"))
-	if err != nil {
-		t.Fatalf("NewRequest: %v", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(connectapi.BrowserAuthenticationModeHeader, connectapi.BrowserAuthenticationModeCookie)
-	req.Header.Set("Origin", "https://attacker.example")
-	response, err := client.Do(req)
-	if err != nil {
-		t.Fatalf("cross-origin migration: %v", err)
-	}
-	response.Body.Close()
-	if response.StatusCode != http.StatusForbidden {
-		t.Fatalf("cross-origin migration status = %d, want 403", response.StatusCode)
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusNotFound {
+		t.Fatalf("removed migration route status = %d, want 404", response.StatusCode)
 	}
 	if cookies := response.Header.Values("Set-Cookie"); len(cookies) != 0 {
-		t.Fatalf("cross-origin migration Set-Cookie = %v, want none", cookies)
+		t.Fatalf("removed migration route Set-Cookie = %v, want none", cookies)
+	}
+	if isCSRFExemptUnsafePath("/auth/browser/session/migrate") {
+		t.Fatal("removed migration route is exempt from CSRF protection")
 	}
 }
 
@@ -1537,7 +1418,7 @@ func TestAuthenticatedPublicDiscoveryDoesNotSetCookies(t *testing.T) {
 		t.Fatalf("browser login status = %d, want 200", loginResponse.StatusCode)
 	}
 
-	for _, path := range []string{serverDiscoveryConnectPath + "?connect=v1&encoding=json", serverDiscoveryWellKnownPath} {
+	for _, path := range []string{serverDiscoveryConnectPath + "?connect=v1&encoding=json", serverFeaturesConnectPath + "?connect=v1&encoding=json", serverDiscoveryWellKnownPath} {
 		discoveryResponse, err := client.Get(ts.URL + path)
 		if err != nil {
 			t.Fatalf("authenticated discovery GET: %v", err)
@@ -1874,7 +1755,7 @@ func TestAuthRoutes_Logout(t *testing.T) {
 
 func TestAuthRoutes_LogoutReportsAuthoritativeRevocationFailure(t *testing.T) {
 	var server *HTTPServer
-	ts, client, chattoCore := setupTestHTTPServerWithHook(t, func(configured *HTTPServer) {
+	ts, client, chattoCore, stop := setupTestHTTPServerWithLifecycle(t, func(configured *HTTPServer) {
 		server = configured
 	})
 	ctx := testContext(t)
@@ -1892,6 +1773,9 @@ func TestAuthRoutes_LogoutReportsAuthoritativeRevocationFailure(t *testing.T) {
 		t.Fatalf("login status = %d, want 200", loginResponse.StatusCode)
 	}
 
+	// The request must observe unavailable storage without racing core workers
+	// that also depend on this connection.
+	stop()
 	server.nc.Close()
 	logoutResponse, err := postBrowserAuthentication(client, ts.URL+"/auth/browser/logout", []byte("{}"))
 	if err != nil {

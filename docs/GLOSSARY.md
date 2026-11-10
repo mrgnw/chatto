@@ -14,7 +14,7 @@ Names for visible surfaces and component groupings. When a name here disagrees w
 
 **Application Header** — Global bar across the top of the client. Client-wide navigation, notifications, and meta controls live on the left; the active server's message of the day occupies the centre; version and session controls live on the right. Implemented in `apps/frontend/src/lib/ui/AppHeader.svelte`.
 
-**App Preferences** — User choices that the current app applies to every registered server. They include appearance, thread presentation, language, message editor, and send-key behavior. The Application Header gear opens Appearance in unified Settings for the active authenticated server. The App preferences group also contains Language and Composer. A separate App Preferences sidebar remains available when there is no authenticated server. App Preferences do not sync to another browser or device. See [FDR-002](fdr/FDR-002-replies-and-threads.md), [FDR-022](fdr/FDR-022-user-profile.md), and [FDR-032](fdr/FDR-032-message-formatting.md).
+**App Preferences** — User choices that the current app applies to every registered server. They include appearance, thread presentation, language, message editor, and send-key behavior. The Application Header gear opens Overview in unified Settings for the active authenticated server. The App preferences group also contains Language and Composer. With no authenticated server, the same Settings sidebar and Overview show only App preferences that do not need a session. App Preferences do not sync to another browser or device. See [FDR-002](fdr/FDR-002-replies-and-threads.md), [FDR-021](fdr/FDR-021-admin-dashboard.md), [FDR-022](fdr/FDR-022-user-profile.md), and [FDR-032](fdr/FDR-032-message-formatting.md).
 
 **User Preferences** — A user's choices for one server. They include time and region settings and notification behavior. The server can sync a preference, or the app can store it with a key for each server. The term identifies the user and server scope, not the storage method. The unified Settings sidebar puts these pages in the Your account group. See [FDR-012](fdr/FDR-012-notifications.md) and [FDR-022](fdr/FDR-022-user-profile.md).
 
@@ -22,7 +22,7 @@ Names for visible surfaces and component groupings. When a name here disagrees w
 
 **Server Gutter** — Narrow leftmost column listing the user's servers, with the add-server button at the bottom. Metaphor borrowed from the gutter in a text editor: a thin marginal strip. Implemented in `apps/frontend/src/lib/ServerGutter.svelte`.
 
-**Server Sidebar** — The wider sidebar to the right of the Server Gutter. It controls the position, mobile slide, size, and current-user footer of a server pane. App Preferences uses the same shell without the server footer. The sidebar contains the server banner and room list, the unified Settings navigation, or the App Preferences navigation. Implemented in `apps/frontend/src/lib/components/ServerSidebar.svelte`.
+**Server Sidebar** — The wider sidebar to the right of the Server Gutter. It controls the position, mobile slide, size, and current-user footer of a server pane. Settings uses the same shell without the server footer when no server is authenticated. The sidebar contains the server banner and room list or the unified Settings navigation. Implemented in `apps/frontend/src/lib/components/ServerSidebar.svelte`.
 
 **Room invitation** — A request for an existing human server member to join a channel room. It appears in the room list and welcome screen, expires after seven days, and grants membership only after acceptance. It is distinct from a server invite link. See [FDR-051](fdr/FDR-051-room-invitations.md).
 
@@ -58,6 +58,10 @@ Names for visible surfaces and component groupings. When a name here disagrees w
 
 **Panel** — Bordered card used across instance-admin (`/chat/[serverId]/admin/*`) and per-server settings pages. Shared visual chrome for administrative interfaces. See [`cli/AGENTS.md`](../cli/AGENTS.md).
 
+**Hover Lift** — Shared motion cue that raises an interactive card or visual choice slightly while the pointer hovers over it. Appearance swatches, server cards, and Settings Overview cards use it. It stays still with reduced motion. See [the design system](../apps/frontend/DESIGN_SYSTEM.md#hover-lift).
+
+**Inset Frame** — Shared visual treatment for context menus, palettes, dialog trays, and previews: a raised outer rim around recessed content. `inset-frame` defines the border, corners, fill, and default rim; `inset-content` defines the inner surface. Consumer variants add layout and elevation. See [the design system](../apps/frontend/DESIGN_SYSTEM.md#inset-frame).
+
 ## Product
 
 **First-run setup** — Web flow that gives a new server a name and a local owner
@@ -72,13 +76,17 @@ User-facing concepts. If a user might say the word, it goes here.
 
 **Neighborhood** — Servers that one Chatto server discovers through its Neighbors: each direct Neighbor, plus servers that a mutually advertising Neighbor mutually recommends, to at most two mutual hops. The server discovers its Neighborhood in the background and publishes a cached result. See [FDR-042](fdr/FDR-042-chatto-neighbors.md) and [ADR-106](adr/ADR-106-server-side-neighborhood-discovery.md).
 
-**Server Directory** — Client surface that merges the cached Neighborhoods of all registered servers. The Server Gutter opens it in a history-backed dialog; `/chat/servers` shows it as a page. It contacts only registered servers, accepts a direct server address, keeps registered results visible as joined, and shows recommendation-source attribution on server profile cards. It does not rank its results. See [FDR-042](fdr/FDR-042-chatto-neighbors.md).
+**Known Server** — A server that the user explicitly found by address and that the client remembers on the device as a discovery source. This does not register the server, create a session, or add it to the Server Gutter. See [FDR-042](fdr/FDR-042-chatto-neighbors.md).
+
+**Server Directory** — Client page at `/chat/servers` that shows registered servers, known servers, and their cached Neighborhoods in one grid, in that order. The Server Gutter opens this page. Address lookup adds a known server; modal lookup also registers and opens it when compatible sign-in is available. Only registered and explicitly discovered servers supply discovery results. Selecting a card's recommendation line opens all its sources in a dialog. See [FDR-042](fdr/FDR-042-chatto-neighbors.md).
 
 **Client application** — Browser, desktop, mobile app, or integration that a user authorizes to access a Chatto server; its stable identity comes from CIMD or a built-in registration. A client appears in server administration after completing at least one user-approved authorization. Administrators may label it trusted or block it, but trust never replaces user consent. See [ADR-071](adr/ADR-071-cimd-identified-open-oauth-clients.md) and [FDR-023](fdr/FDR-023-authentication-and-sessions.md).
 
 **MCP server** — Optional Chatto public HTTP integration that lets an agent host discover and call bounded user-scoped tools through the Model Context Protocol. It has no Operator API authority. See [FDR-043](fdr/FDR-043-model-context-protocol-integration.md) and [ADR-085](adr/ADR-085-agent-integration-through-mcp.md).
 
 **MCP scope** — OAuth grant ceiling for one class of MCP tools, such as `chatto:rooms:read` or `chatto:messages:write`. It limits delegated agent authority in addition to normal Chatto permissions and resource visibility. It is not an RBAC permission.
+
+**Deactivated account** — An account that retains its data and assigned roles but cannot use the server. Reactivation permits new sign-ins; old human sessions stay invalid. See [FDR-018](fdr/FDR-018-account-lifecycle.md).
 
 **Bot account** — Passwordless user identity for an integration, explicitly owned by a human and marked as a bot. It receives only directly configured permissions, capped by the owner's current authority. See [FDR-038](fdr/FDR-038-bot-accounts.md).
 
@@ -91,13 +99,15 @@ account-directed email. The first verified email becomes primary, and adding
 another address does not change the selection. See
 [FDR-018](fdr/FDR-018-account-lifecycle.md).
 
-**Invite Link** — Shareable, revocable link that admits one or more new accounts when a server uses invite-only account creation; it may have a use limit or expiry. See [FDR-036](fdr/FDR-036-invite-links.md).
+**Invitation Code** — A code that permits one new account on an invite-only server. Administrators issue and revoke codes, with optional expiry. Validation does not consume the code; successful account creation does. See [FDR-036](fdr/FDR-036-invite-links.md).
 
 **Space** — Legacy tier between server and room. Being consolidated into the server concept; in most deployments there is exactly one space per server (the _primary space_). See [ADR-027](adr/ADR-027-instance-space-server-consolidation.md).
 
 **Primary Space** — Transitional config-designated "the one space that matters" within a server. Bridge construct used while Instance + Space collapse into Server. See [ADR-027](adr/ADR-027-instance-space-server-consolidation.md).
 
 **Room** — A channel or DM. Where messages live. Identified by `(serverId, roomId)`.
+
+**Room notice** — One current Markdown notice for a channel room's members. A correction preserves device-local dismissals; explicit republishing makes the notice appear again. See [FDR-054](fdr/FDR-054-room-notices.md).
 
 **Universal room** — Channel room that behaves as joined for every server member currently eligible to join it, without writing per-user membership events. See [FDR-019](fdr/FDR-019-room-lifecycle.md).
 
@@ -162,6 +172,8 @@ Chatto's RBAC model. Read top-to-bottom — terms build on each other.
 **Permission** — Capability gate with an opaque, stable identifier, for example `message.post` or `role.assign`. Punctuation does not define authority. The catalog in `cli/internal/core/permission.go` defines scope and explicit inclusion.
 
 **Privileged Mode** — Explicit, fixed 15-minute activation of the elevation-required permissions that a human is currently entitled to use on one server session. For an effective owner, it also activates the owner override. It does not grant a role or permission. See [ADR-096](adr/ADR-096-session-scoped-privileged-mode.md), [ADR-105](adr/ADR-105-privileged-mode-gates-owner-override.md), and [FDR-046](fdr/FDR-046-privileged-mode.md).
+
+**Shield Mode** — User-facing name for Privileged Mode, controlled by the shield button for the current server. It temporarily activates eligible permissions and the effective-owner override for that session. See [FDR-046](fdr/FDR-046-privileged-mode.md).
 
 **Position** — Numeric display/order value for a role. `everyone` = 0, `moderator` = 100, `admin` = 900, `owner` = 1000. Custom roles slot in the gaps. Position is not an authorization rank.
 

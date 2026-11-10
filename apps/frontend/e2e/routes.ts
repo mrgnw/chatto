@@ -59,9 +59,10 @@ export const serverAdmin = (sub?: string) =>
   sub ? `/chat/${HOME}/manage/server/${sub}` : `/chat/${HOME}/manage/server`;
 export const serverAdminGeneral = serverAdmin('general');
 export const serverAdminRooms = `/chat/${HOME}/manage/rooms`;
+export const serverAdminRoles = serverAdmin('roles');
 export const serverAdminPermissions = serverAdmin('permissions');
-export const serverAdminPermissionsNew = serverAdmin('permissions/new');
-export const serverAdminPermission = (roleName: string) => serverAdmin(`permissions/${roleName}`);
+export const serverAdminRoleNew = serverAdmin('roles/new');
+export const serverAdminRole = (roleName: string) => serverAdmin(`roles/${roleName}`);
 export const serverAdminMembers = serverAdmin('members');
 export const serverAdminMember = (userId: string) => serverAdmin(`members/${userId}`);
 export const serverAdminMemberDelete = (userId: string) => serverAdmin(`members/${userId}/delete`);
@@ -82,12 +83,14 @@ export const settingsAccount = `/chat/${HOME}/settings/account`;
 export const settingsVerifyEmail = `/chat/${HOME}/settings/account/verify-email`;
 export const settingsNotifications = `/chat/${HOME}/settings/notifications`;
 export const settingsTime = `/chat/${HOME}/settings/time`;
+export const settingsOverview = `/chat/${HOME}/settings/overview`;
 export const settingsAppearance = `/chat/${HOME}/settings/appearance`;
 export const settingsLanguage = `/chat/${HOME}/settings/language`;
 export const settingsComposer = `/chat/${HOME}/settings/composer`;
 // Legacy App Preferences routes remain available as authenticated redirects
 // and as the standalone no-server fallback.
 export const appPreferences = '/chat/preferences';
+export const appPreferencesAppearance = '/chat/preferences/appearance';
 export const appPreferencesLanguage = '/chat/preferences/language';
 export const appPreferencesComposer = '/chat/preferences/composer';
 

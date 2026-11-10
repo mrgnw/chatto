@@ -31,7 +31,7 @@ Server operators can optionally expose local [Prometheus metrics](/guides/operat
 
 With the exception of voice and video calls, Chatto is not end-to-end encrypted. A running Chatto server must be able to decrypt messages before sending them to authorized clients.
 
-Chatto instead encrypts message text and selected personal data at rest with per-user keys. Deleting an account shreds those keys so the protected data can no longer be decrypted. Attachments and some event metadata are outside this application-level encryption boundary and must be protected by the underlying NATS or S3-compatible storage. See [Encryption at Rest and Data Erasure](/guides/operations/privacy-erasure/) for the exact coverage and threat model.
+Chatto instead encrypts message text and selected personal data at rest with per-user keys. Deleting an account shreds those keys so the protected data can no longer be decrypted. Attachments and some event metadata are outside this application-level encryption boundary and must be protected by the underlying NATS or S3-compatible storage. See [Encryption at Rest and Data Erasure](/guides/operations/security/#encryption-and-data-erasure) for the exact coverage and threat model.
 
 We may layer end-to-end-encrypted features on top of Chatto in the future, but there is no general end-to-end encryption mode today.
 
@@ -43,25 +43,10 @@ When you use more than one community, the Chatto client connects to each server 
 
 ## Is there a desktop app? Are there mobile apps?
 
-Not yet. Dedicated desktop and mobile apps are planned, but we do not have an estimated release date for them.
-
-In the meantime, Chatto is an excellent Progressive Web App (PWA) on both desktop and mobile devices. You can install it from a supported browser or add it to your Home Screen, then launch it like any other app. Installed PWAs also support features such as app badges and [push notifications](/guides/operations/notifications-web-push/) where the operating system and browser allow them.
-
-For mobile installation steps, see [Install Chatto on Your Phone](/getting-started/install-pwa/). The guide covers Safari on iOS and Chrome or Firefox on Android.
-
-## Can I read chats without a connection?
-
-No. Chatto does not store your chats on your device. The installed app requires a connection to its server to open and load rooms and messages. If the connection drops while Chatto is open, the loaded rooms stay visible. When the connection returns, Chatto loads missed updates, and you can send messages while they load. Sending requires a working server connection; failed requests keep your draft and are not queued for automatic retry.
-
-## Can I disable the startup animations?
-
-Enable reduced motion in your operating system or browser. Chatto then shows a
-static loading background and skips the page entrance animation.
-
-The loading screen follows your selected light or dark theme. The page entrance
-animation runs once when you open or reload the app. It does not repeat when
-you navigate between pages. Typing or clicking stops the entrance animation
-immediately.
+Download the experimental desktop app from
+[Chatto releases](https://github.com/chattocorp/chatto/releases).
+For mobile devices, see [Install Chatto on Your Phone](/getting-started/install-pwa/).
+Installed web apps need a connection to their Chatto server.
 
 ## Where can I get help or report a problem?
 

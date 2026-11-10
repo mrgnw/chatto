@@ -894,6 +894,9 @@ describe('MessagesStore — room lifecycle ownership', () => {
 
     await settle();
     await store.jumpToMessage('historical-target');
+    store.cancelPendingHistoricalJump();
+    expect(getRoomEvents).toHaveBeenCalledOnce();
+    expect(store.rootEvents.map((event) => event.id)).toEqual(['historical-target']);
     await expect(store.restoreLatestWindow()).resolves.toBe(true);
 
     expect(getRoomEvents).toHaveBeenCalledTimes(2);
@@ -956,7 +959,7 @@ describe('MessagesStore — room lifecycle ownership', () => {
     await settle();
 
     const jumping = store.jumpToMessage('historical-target');
-    await expect(store.restoreLatestWindow()).resolves.toBe(false);
+    store.cancelPendingHistoricalJump();
     around.resolve({
       events: [threadMessageEvent('historical-target') as never],
       startCursor: 'tl:historical',
@@ -3040,6 +3043,45 @@ describe('MessagesStore — room lifecycle ownership', () => {
     expect(store.rootEvents[0].event).toMatchObject({ replyCount: 1 });
     store.dispose();
   });
+
+  it.each(['other', 'root', 'deleted-root'])(
+    'includes only the reply author when the first live reply arrives: %s',
+    async (author) => {
+      const store = new MessagesStore(
+        new FakeQueryClient() as unknown as ServerConnection,
+        () => null,
+        { roomId: 'room-1' },
+        fakeTimelineAPI()
+      );
+      await settle();
+      const rootActor = {
+        id: 'root',
+        login: 'root',
+        displayName: 'Root',
+        presenceStatus: PresenceStatus.OFFLINE,
+        deleted: author === 'deleted-root'
+      };
+      store.ingestEvent({ ...threadMessageEvent('t1'), actorId: 'root', actor: rootActor });
+      const replyActor = {
+        id: author === 'root' ? 'root' : 'other',
+        login: 'reply',
+        displayName: 'Reply',
+        presenceStatus: PresenceStatus.OFFLINE
+      };
+      const reply = {
+        ...threadMessageEvent('r1', 't1'),
+        actorId: replyActor.id,
+        actor: replyActor
+      };
+      store.ingestEvent(reply);
+      store.ingestEvent(reply);
+      expect(store.rootEvents[0].event).toMatchObject({
+        replyCount: 1,
+        threadParticipants: [replyActor]
+      });
+      store.dispose();
+    }
+  );
 
   it('soft-refreshes the latest room window without entering initial loading', async () => {
     const fake = new FakeQueryClient([

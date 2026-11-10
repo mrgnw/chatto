@@ -23,13 +23,19 @@
     url:
       'data:image/svg+xml,' +
       encodeURIComponent(
-        `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="500"><rect width="800" height="500" fill="${color}"/><circle cx="400" cy="250" r="100" fill="white"/></svg>`
+        `<svg xmlns="http://www.w3.org/2000/svg" width="800" height="500"><rect x="80" y="50" width="640" height="400" rx="24" fill="${color}"/><circle cx="400" cy="250" r="100" fill="white"/></svg>`
       )
   }));
   let documentOpen = $state(false);
   let pdfOpen = $state(false);
   const archiveDescription =
     'Project files and reference material for the next release.\n\nIncludes source files, illustrations, and notes from the design review.';
+  let textOpen = $state(false);
+  const textSource =
+    '# Server log\n\n  Indented line\twith a tab\n<em>Literal markup</em>\n' +
+    'A long log entry '.repeat(40) +
+    '\n' +
+    Array.from({ length: 50 }, (_, i) => `Line ${i + 1}: ready`).join('\n');
   let markdownOpen = $state(false);
   const markdownSource =
     '# Project review\n\nA **rendered Markdown** attachment.\n\n' +
@@ -44,26 +50,35 @@
 </script>
 
 <Story name="Image gallery" asChild>
-  <button
-    class="btn-action"
-    onclick={() => {
-      index = 0;
-      open = true;
-    }}>Open gallery</button
-  >
+  <div class="flex gap-3">
+    {#each images as image, position (image.id)}
+      <button
+        class="block h-25 w-40 overflow-hidden rounded-lg"
+        aria-label={`Open ${image.filename}`}
+        onclick={() => {
+          index = position;
+          open = true;
+        }}><img src={image.url} alt={image.filename} class="h-full w-full object-cover" /></button
+      >
+    {/each}
+  </div>
   {#if open}
     <AttachmentModal
       filename={images[index].filename}
       contentType={images[index].contentType}
-      description="A white circle on a coloured background."
+      description="A white circle on a coloured rectangle with transparent edges."
       size={24000}
       imageViewer
       downloadUrl={images[index].url}
       {index}
       count={images.length}
-      onnavigate={(direction) => (index = (index + direction + images.length) % images.length)}
+      onnavigate={(direction) => {
+        index = (index + direction + images.length) % images.length;
+      }}
       ondownload={() => {}}
-      onclose={() => (open = false)}
+      onclose={() => {
+        open = false;
+      }}
     >
       {#key images[index].id}
         <AttachmentPreview
@@ -163,6 +178,36 @@
         serverId="story"
         url={pdfUrl}
         busy={false}
+        onpreview={() => {}}
+        onerror={async () => null}
+      />
+    </AttachmentModal>
+  {/if}
+</Story>
+
+<Story name="Text document" asChild>
+  <button class="btn-action" onclick={() => (textOpen = true)}>Open text</button>
+  {#if textOpen}
+    <AttachmentModal
+      filename="console.txt"
+      contentType="text/plain"
+      size={2048}
+      downloadUrl={'data:text/plain;charset=utf-8,' + encodeURIComponent(textSource)}
+      ondownload={() => {}}
+      onclose={() => (textOpen = false)}
+    >
+      <AttachmentPreview
+        item={{
+          id: 'text',
+          filename: 'console.txt',
+          contentType: 'text/plain',
+          width: 0,
+          height: 0
+        }}
+        serverId="story"
+        url={null}
+        busy={false}
+        textContent={textSource}
         onpreview={() => {}}
         onerror={async () => null}
       />

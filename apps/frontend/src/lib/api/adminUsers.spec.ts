@@ -17,6 +17,26 @@ describe('createAdminUserManagementAPI', () => {
     vi.resetAllMocks();
   });
 
+  it('changes account access and preserves the server permission hint', async () => {
+    mocks.setUserDeactivated.mockReturnValue({
+      member: {
+        user: { id: 'target', login: 'target', displayName: 'Target' },
+        deactivated: true,
+        viewerCanChangeDeactivation: true
+      }
+    });
+    const result = await adminUserAPI().setUserDeactivated('target', true);
+    expect(receivedRequest(mocks.setUserDeactivated)).toMatchObject({
+      userId: 'target',
+      deactivated: true
+    });
+    expect(result).toMatchObject({
+      id: 'target',
+      deactivated: true,
+      viewerCanChangeDeactivation: true
+    });
+  });
+
   it('lists admin members and maps timestamps and roles', async () => {
     const createdAt = new Date('2026-01-02T03:04:05.000Z');
     mocks.listMembers.mockReturnValue({
@@ -66,6 +86,7 @@ describe('createAdminUserManagementAPI', () => {
           bot: { ownerUserId: 'owner' },
           roles: ['admin'],
           createdAt: '2026-01-02T03:04:05.000Z',
+          deactivated: false,
           deleted: false,
           hasVerifiedEmail: true,
           verifiedEmails: ['first@example.test', 'alice@example.test'],
@@ -103,7 +124,7 @@ describe('createAdminUserManagementAPI', () => {
     expect(mocks.batchGetMembers).toHaveBeenCalledOnce();
   });
 
-  it('gets admin member details and maps permission metadata', async () => {
+  it('gets admin member details and maps role metadata', async () => {
     const lastLoginChange = new Date('2026-02-03T04:05:06.000Z');
     mocks.getMember.mockReturnValue({
       member: {
@@ -130,9 +151,7 @@ describe('createAdminUserManagementAPI', () => {
             isSystem: true,
             position: 50,
             pingable: false
-          },
-          permissions: ['room.manage'],
-          permissionDenials: ['message.post']
+          }
         }
       ],
       availablePermissions: ['room.manage', 'message.post'],
@@ -163,15 +182,14 @@ describe('createAdminUserManagementAPI', () => {
         verifiedEmails: [],
         primaryVerifiedEmail: null,
         viewerCanDeleteAccount: false,
-        lastLoginChange: '2026-02-03T04:05:06.000Z'
+        lastLoginChange: '2026-02-03T04:05:06.000Z',
+        deactivated: false
       },
       roles: [
         {
           name: 'moderator',
           displayName: 'Moderator',
-          position: 50,
-          permissions: ['room.manage'],
-          permissionDenials: ['message.post']
+          position: 50
         }
       ],
       availablePermissions: ['room.manage', 'message.post'],

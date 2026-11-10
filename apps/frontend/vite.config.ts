@@ -24,7 +24,7 @@ function localeCatalogChunkName(moduleId: string): string | null {
   if (!catalogSections.includes(section as (typeof catalogSections)[number])) return null;
 
   const boundary = catalogBoundary(section as (typeof catalogSections)[number]);
-  if (locale === 'en-GB' && boundary !== 'management') return null;
+  if (locale === 'en-GB' && boundary !== 'management' && boundary !== 'help') return null;
   return `translatto-${locale}-${boundary}`;
 }
 
@@ -152,7 +152,7 @@ async function createTestConfig(): Promise<NonNullable<UserConfig['test']>> {
           deps: {
             optimizer: {
               web: {
-                include: [...tiptapDeps]
+                include: [...tiptapDeps, 'pele']
               }
             }
           }
@@ -235,7 +235,9 @@ export default defineConfig(async ({ command }) => {
       ]
     },
     optimizeDeps: {
-      include: [...tiptapDeps]
+      // Prepare the lazy worker dependency before a first diagram can trigger
+      // a Vite reload. This affects development/tests, not production loading.
+      include: [...tiptapDeps, 'pele']
     },
     server: {
       // Proxy some URL routes to the Go backend process in development.

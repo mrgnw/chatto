@@ -22,8 +22,6 @@ import (
 )
 
 func TestWaitForRealtimeCursorBringsAnotherReplicaToTheResourceBoundary(t *testing.T) {
-	t.Parallel()
-
 	ns, _ := testutil.StartNATS(t)
 	primary := startReplica(t, ns, testCoreConfig())
 	ctx := testContext(t)
@@ -34,7 +32,7 @@ func TestWaitForRealtimeCursorBringsAnotherReplicaToTheResourceBoundary(t *testi
 	if _, err := primary.UpdateUserBio(ctx, viewer.GetId(), "visible at boundary E"); err != nil {
 		t.Fatalf("UpdateUserBio: %v", err)
 	}
-	plan, err := primary.PlanRealtimeReplay(ctx, viewer.GetId(), "")
+	plan, err := primary.PlanRealtimeReplay(ctx, viewer.GetId(), "", nil)
 	if err != nil {
 		t.Fatalf("PlanRealtimeReplay: %v", err)
 	}
@@ -70,15 +68,13 @@ func TestWaitForRealtimeCursorBringsAnotherReplicaToTheResourceBoundary(t *testi
 }
 
 func TestRealtimeReplayKeepsRoleChangesAsEvents(t *testing.T) {
-	t.Parallel()
-
 	chatto, _ := setupTestCore(t)
 	ctx := testContext(t)
 	viewer, err := chatto.CreateUser(ctx, SystemActorID, "role-replay", "Role Replay", "password123")
 	if err != nil {
 		t.Fatal(err)
 	}
-	before, err := chatto.PlanRealtimeReplay(ctx, viewer.GetId(), "")
+	before, err := chatto.PlanRealtimeReplay(ctx, viewer.GetId(), "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,7 +84,7 @@ func TestRealtimeReplayKeepsRoleChangesAsEvents(t *testing.T) {
 	if err := chatto.AssignServerRole(ctx, SystemActorID, viewer.GetId(), "helper"); err != nil {
 		t.Fatal(err)
 	}
-	after, err := chatto.PlanRealtimeReplay(ctx, viewer.GetId(), before.BoundaryCursor)
+	after, err := chatto.PlanRealtimeReplay(ctx, viewer.GetId(), before.BoundaryCursor, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,8 +102,6 @@ func TestRealtimeReplayKeepsRoleChangesAsEvents(t *testing.T) {
 }
 
 func TestRealtimeCursorRoundTrip(t *testing.T) {
-	t.Parallel()
-
 	chatto, _ := setupTestCore(t)
 	identity := "evt-incarnation-v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	userID := "cursor-viewer"
@@ -160,8 +154,6 @@ func TestRealtimeCursorRoundTrip(t *testing.T) {
 }
 
 func TestRealtimeCursorRejectsMalformedSealedPayload(t *testing.T) {
-	t.Parallel()
-
 	chatto := &ChattoCore{config: config.CoreConfig{SecretKey: "cursor-test-secret"}}
 	now := time.Unix(1_788_610_000, 0)
 	payload := make([]byte, realtimeCursorPayloadSize)
@@ -193,8 +185,6 @@ func TestRealtimeCursorRejectsMalformedSealedPayload(t *testing.T) {
 }
 
 func TestRealtimeCursorPreservesFullSequenceRange(t *testing.T) {
-	t.Parallel()
-
 	chatto := &ChattoCore{config: config.CoreConfig{SecretKey: "cursor-test-secret"}}
 	now := time.Now()
 	for _, sequence := range []uint64{0, 1, 1<<53 + 1, ^uint64(0)} {
@@ -210,8 +200,6 @@ func TestRealtimeCursorPreservesFullSequenceRange(t *testing.T) {
 }
 
 func TestWaitForRealtimeCursorWaitsOnlyForRequestedContentBoundary(t *testing.T) {
-	t.Parallel()
-
 	ns, _ := testutil.StartNATS(t)
 	primary := startReplica(t, ns, testCoreConfig())
 	ctx := testContext(t)
@@ -219,7 +207,7 @@ func TestWaitForRealtimeCursorWaitsOnlyForRequestedContentBoundary(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	boundary, err := primary.PlanRealtimeReplay(ctx, viewer.GetId(), "")
+	boundary, err := primary.PlanRealtimeReplay(ctx, viewer.GetId(), "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,8 +261,6 @@ func TestWaitForRealtimeCursorWaitsOnlyForRequestedContentBoundary(t *testing.T)
 }
 
 func TestRealtimeCursorCoordinatesAndReplayBudgetAreIndependent(t *testing.T) {
-	t.Parallel()
-
 	chatto, _ := setupTestCore(t)
 	identity := "evt-incarnation-v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	now := time.Now()
@@ -308,7 +294,7 @@ func TestRealtimeCursorOutsideReplayWorkBudgetStillBoundsRPC(t *testing.T) {
 	chatto, _ := setupTestCore(t)
 	ctx := testContext(t)
 	const viewerID = "busy-stream-viewer"
-	before, err := chatto.PlanRealtimeReplay(ctx, viewerID, "")
+	before, err := chatto.PlanRealtimeReplay(ctx, viewerID, "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -326,18 +312,16 @@ func TestRealtimeCursorOutsideReplayWorkBudgetStillBoundsRPC(t *testing.T) {
 	if err := chatto.WaitForRealtimeCursor(ctx, viewerID, before.BoundaryCursor); err != nil {
 		t.Fatalf("valid minimum cursor outside replay window failed: %v", err)
 	}
-	replay, err := chatto.PlanRealtimeReplay(ctx, viewerID, before.BoundaryCursor)
+	replay, err := chatto.PlanRealtimeReplay(ctx, viewerID, before.BoundaryCursor, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !replay.Reset || !replay.HadSequenceGap || len(replay.Events) != 0 {
+	if !replay.Reset || len(replay.Events) != 0 {
 		t.Fatalf("oversized replay did not select a complete fallback: %v", replay)
 	}
 }
 
 func TestRealtimeCursorExpiresAfterPublicLifetime(t *testing.T) {
-	t.Parallel()
-
 	chatto, _ := setupTestCore(t)
 	identity := "evt-incarnation-v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	userID := "cursor-viewer"
@@ -355,8 +339,6 @@ func TestRealtimeCursorExpiresAfterPublicLifetime(t *testing.T) {
 }
 
 func TestRealtimeCursorRejectsImplausibleFutureIssueTime(t *testing.T) {
-	t.Parallel()
-
 	chatto, _ := setupTestCore(t)
 	identity := "evt-incarnation-v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	userID := "cursor-viewer"
@@ -370,70 +352,90 @@ func TestRealtimeCursorRejectsImplausibleFutureIssueTime(t *testing.T) {
 	}
 }
 
-func TestRealtimeCursorAtCurrentBoundary(t *testing.T) {
-	t.Parallel()
-
+func TestRealtimeCursorReplayBudget(t *testing.T) {
 	chatto, _ := setupTestCore(t)
 	ctx := testContext(t)
 	const userID = "cursor-boundary-viewer"
-
-	plan, err := chatto.PlanRealtimeReplay(ctx, userID, "")
+	identity, err := evtstream.Identity(chatto.storage.serverEvtStream)
 	if err != nil {
-		t.Fatalf("initial PlanRealtimeReplay: %v", err)
+		t.Fatal(err)
 	}
-	current, err := chatto.RealtimeCursorAtCurrentBoundary(ctx, userID, plan.BoundaryCursor)
-	if err != nil {
-		t.Fatalf("RealtimeCursorAtCurrentBoundary: %v", err)
-	}
-	if !current {
-		t.Fatal("boundary cursor reported stale")
-	}
-
-	if _, err := chatto.CreateUser(ctx, SystemActorID, "cursor-boundary-new-user", "Cursor Boundary User", "password123"); err != nil {
-		t.Fatalf("CreateUser: %v", err)
-	}
-	current, err = chatto.RealtimeCursorAtCurrentBoundary(ctx, userID, plan.BoundaryCursor)
-	if err != nil {
-		t.Fatalf("RealtimeCursorAtCurrentBoundary after event: %v", err)
-	}
-	if current {
-		t.Fatal("cursor before a durable event reported current")
-	}
-	replay, err := chatto.PlanRealtimeReplay(ctx, userID, plan.BoundaryCursor)
-	if err != nil {
-		t.Fatalf("PlanRealtimeReplay after boundary advanced: %v", err)
-	}
-	if !replay.HadSequenceGap {
-		t.Fatal("replay did not report the gap that appeared after boundary classification")
-	}
-
-	for name, cursor := range map[string]string{
-		"empty":      "",
-		"invalid":    "not-a-cursor",
-		"cross-user": plan.BoundaryCursor,
-	} {
-		viewer := userID
-		if name == "cross-user" {
-			viewer = "different-viewer"
+	appendFact := func(index uint64) {
+		t.Helper()
+		event := &evtv1.Event{
+			Id: fmt.Sprintf("admission-cost-%d", index),
+			Event: &evtv1.Event_ServerWelcomeMessageChanged{
+				ServerWelcomeMessageChanged: &evtv1.ServerWelcomeMessageChangedEvent{},
+			},
 		}
-		current, err := chatto.RealtimeCursorAtCurrentBoundary(ctx, viewer, cursor)
+		if _, err := chatto.EventPublisher.AppendEventually(ctx, evtstream.ConfigAggregate().SubjectFor(event), event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for index := uint64(0); index <= realtimeReplaySmallSequenceSpan; index++ {
+		appendFact(index)
+	}
+	info, err := chatto.storage.serverEvtStream.Info(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seal := func(viewer, stream string, sequence uint64, now time.Time) string {
+		t.Helper()
+		cursor, err := chatto.encodeRealtimeCursorAt(viewer, stream, sequence, now)
 		if err != nil {
-			t.Fatalf("%s cursor classification: %v", name, err)
+			t.Fatal(err)
 		}
-		if current {
-			t.Fatalf("%s cursor reported current", name)
-		}
+		return cursor
+	}
+	now := time.Now()
+	tail := info.State.LastSeq
+	smallCursor := seal(userID, identity, tail-realtimeReplaySmallSequenceSpan, now)
+	for _, tc := range []struct {
+		name   string
+		cursor string
+		want   bool
+	}{
+		{"empty", "", false},
+		{"invalid", "not-a-cursor", true},
+		{"current", seal(userID, identity, tail, now), false},
+		{"one event", seal(userID, identity, tail-1, now), false},
+		{"small limit", smallCursor, false},
+		{"above small limit", seal(userID, identity, tail-realtimeReplaySmallSequenceSpan-1, now), true},
+		{"future sequence", seal(userID, identity, tail+1, now), true},
+		{"expired", seal(userID, identity, tail, now.Add(-realtimeCursorLifetime-time.Second)), true},
+		{"cross-user", seal("another-viewer", identity, tail, now), true},
+		{"foreign stream", seal(userID, "evt-incarnation-v1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", tail, now), true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			charged := false
+			_, err := chatto.PlanRealtimeReplay(ctx, userID, tc.cursor, func() error {
+				if charged {
+					t.Fatal("one plan charged the replay budget twice")
+				}
+				charged = true
+				return nil
+			})
+			if err != nil || charged != tc.want {
+				t.Fatalf("plan admission = %v, %v; want %v, nil", charged, err, tc.want)
+			}
+		})
+	}
+	// The gap can grow while a transport is admitted. The plan uses its own
+	// exact boundary and rejects a newly expensive replay before scanning it.
+	appendFact(realtimeReplaySmallSequenceSpan + 1)
+	wantErr := errors.New("replay budget exhausted")
+	replay, err := chatto.PlanRealtimeReplay(ctx, userID, smallCursor, func() error { return wantErr })
+	if !errors.Is(err, wantErr) || replay.BoundaryCursor != "" || len(replay.Events) != 0 {
+		t.Fatalf("rejected plan = %+v, %v; want empty plan and admission error", replay, err)
 	}
 }
 
-func TestPlanRealtimeReplayReportsRetentionResetGap(t *testing.T) {
-	t.Parallel()
-
+func TestPlanRealtimeReplayRequiresBudgetAfterRetentionTruncation(t *testing.T) {
 	chatto, _ := setupTestCore(t)
 	ctx := testContext(t)
 	const userID = "cursor-retention-viewer"
 
-	before, err := chatto.PlanRealtimeReplay(ctx, userID, "")
+	before, err := chatto.PlanRealtimeReplay(ctx, userID, "", nil)
 	if err != nil {
 		t.Fatalf("initial PlanRealtimeReplay: %v", err)
 	}
@@ -450,18 +452,20 @@ func TestPlanRealtimeReplayReportsRetentionResetGap(t *testing.T) {
 		t.Fatalf("purge retained EVT prefix: %v", err)
 	}
 
-	replay, err := chatto.PlanRealtimeReplay(ctx, userID, before.BoundaryCursor)
+	charged := false
+	replay, err := chatto.PlanRealtimeReplay(ctx, userID, before.BoundaryCursor, func() error {
+		charged = true
+		return nil
+	})
 	if err != nil {
 		t.Fatalf("PlanRealtimeReplay after retention truncation: %v", err)
 	}
-	if !replay.Reset || !replay.HadSequenceGap {
-		t.Fatalf("retention replay = %+v, want reset with reported sequence gap", replay)
+	if !replay.Reset || !charged {
+		t.Fatalf("retention replay = %+v, charged=%v; want reset with replay budget charge", replay, charged)
 	}
 }
 
 func TestPlanRealtimeReplayResetsForExpiredPublicCursor(t *testing.T) {
-	t.Parallel()
-
 	chatto, _ := setupTestCore(t)
 	ctx := testContext(t)
 	identity, err := evtstream.Identity(chatto.storage.serverEvtStream)
@@ -472,7 +476,7 @@ func TestPlanRealtimeReplayResetsForExpiredPublicCursor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("encodeRealtimeCursorAt: %v", err)
 	}
-	plan, err := chatto.PlanRealtimeReplay(ctx, "cursor-viewer", cursor)
+	plan, err := chatto.PlanRealtimeReplay(ctx, "cursor-viewer", cursor, nil)
 	if err != nil {
 		t.Fatalf("PlanRealtimeReplay: %v", err)
 	}
@@ -482,13 +486,11 @@ func TestPlanRealtimeReplayResetsForExpiredPublicCursor(t *testing.T) {
 }
 
 func TestPlanRealtimeReplayReplaysAuthorizedReactionGap(t *testing.T) {
-	t.Parallel()
-
 	chatto, _ := setupTestCore(t)
 	ctx := testContext(t)
 	user, room, messageEventID := setupReactionTest(t, chatto, ctx)
 
-	before, err := chatto.PlanRealtimeReplay(ctx, user.Id, "")
+	before, err := chatto.PlanRealtimeReplay(ctx, user.Id, "", nil)
 	if err != nil {
 		t.Fatalf("initial PlanRealtimeReplay: %v", err)
 	}
@@ -503,7 +505,7 @@ func TestPlanRealtimeReplayReplaysAuthorizedReactionGap(t *testing.T) {
 		t.Fatalf("RemoveReaction = %v, %v", removed, err)
 	}
 
-	replay, err := chatto.PlanRealtimeReplay(ctx, user.Id, before.BoundaryCursor)
+	replay, err := chatto.PlanRealtimeReplay(ctx, user.Id, before.BoundaryCursor, nil)
 	if err != nil {
 		t.Fatalf("PlanRealtimeReplay: %v", err)
 	}
@@ -524,7 +526,7 @@ func TestPlanRealtimeReplayReplaysAuthorizedReactionGap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateUser outsider: %v", err)
 	}
-	outsiderReplay, err := chatto.PlanRealtimeReplay(ctx, outsider.Id, before.BoundaryCursor)
+	outsiderReplay, err := chatto.PlanRealtimeReplay(ctx, outsider.Id, before.BoundaryCursor, nil)
 	if err != nil {
 		t.Fatalf("outsider PlanRealtimeReplay: %v", err)
 	}
@@ -539,8 +541,6 @@ func TestPlanRealtimeReplayReplaysAuthorizedReactionGap(t *testing.T) {
 }
 
 func TestPlanRealtimeReplayReplaysAuthorizedAssetLifecycleGap(t *testing.T) {
-	t.Parallel()
-
 	chatto, _ := setupTestCore(t)
 	ctx := testContext(t)
 	user, room, _ := setupReactionTest(t, chatto, ctx)
@@ -553,7 +553,7 @@ func TestPlanRealtimeReplayReplaysAuthorizedAssetLifecycleGap(t *testing.T) {
 		t.Fatalf("PostMessage: %v", err)
 	}
 
-	before, err := chatto.PlanRealtimeReplay(ctx, user.Id, "")
+	before, err := chatto.PlanRealtimeReplay(ctx, user.Id, "", nil)
 	if err != nil {
 		t.Fatalf("initial PlanRealtimeReplay: %v", err)
 	}
@@ -567,7 +567,7 @@ func TestPlanRealtimeReplayReplaysAuthorizedAssetLifecycleGap(t *testing.T) {
 		t.Fatalf("RecordAssetDeleted: %v", err)
 	}
 
-	replay, err := chatto.PlanRealtimeReplay(ctx, user.Id, before.BoundaryCursor)
+	replay, err := chatto.PlanRealtimeReplay(ctx, user.Id, before.BoundaryCursor, nil)
 	if err != nil {
 		t.Fatalf("PlanRealtimeReplay: %v", err)
 	}
@@ -587,7 +587,7 @@ func TestPlanRealtimeReplayReplaysAuthorizedAssetLifecycleGap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateUser outsider: %v", err)
 	}
-	outsiderReplay, err := chatto.PlanRealtimeReplay(ctx, outsider.Id, before.BoundaryCursor)
+	outsiderReplay, err := chatto.PlanRealtimeReplay(ctx, outsider.Id, before.BoundaryCursor, nil)
 	if err != nil {
 		t.Fatalf("outsider PlanRealtimeReplay: %v", err)
 	}
@@ -599,8 +599,6 @@ func TestPlanRealtimeReplayReplaysAuthorizedAssetLifecycleGap(t *testing.T) {
 }
 
 func TestPlanRealtimeReplayReplaysLegacyRoomScopedAssetLifecycleGap(t *testing.T) {
-	t.Parallel()
-
 	chatto, _ := setupTestCore(t)
 	ctx := testContext(t)
 	user, room, _ := setupReactionTest(t, chatto, ctx)
@@ -612,7 +610,7 @@ func TestPlanRealtimeReplayReplaysLegacyRoomScopedAssetLifecycleGap(t *testing.T
 	if err != nil {
 		t.Fatalf("PostMessage: %v", err)
 	}
-	before, err := chatto.PlanRealtimeReplay(ctx, user.Id, "")
+	before, err := chatto.PlanRealtimeReplay(ctx, user.Id, "", nil)
 	if err != nil {
 		t.Fatalf("initial PlanRealtimeReplay: %v", err)
 	}
@@ -624,7 +622,7 @@ func TestPlanRealtimeReplayReplaysLegacyRoomScopedAssetLifecycleGap(t *testing.T
 		t.Fatalf("append legacy asset event: %v", err)
 	}
 
-	replay, err := chatto.PlanRealtimeReplay(ctx, user.Id, before.BoundaryCursor)
+	replay, err := chatto.PlanRealtimeReplay(ctx, user.Id, before.BoundaryCursor, nil)
 	if err != nil {
 		t.Fatalf("PlanRealtimeReplay: %v", err)
 	}
@@ -634,8 +632,6 @@ func TestPlanRealtimeReplayReplaysLegacyRoomScopedAssetLifecycleGap(t *testing.T
 }
 
 func TestAssetEventTimelineTargetResolvesDeletedProcessedDerivative(t *testing.T) {
-	t.Parallel()
-
 	chatto, _ := setupTestCore(t)
 	ctx := testContext(t)
 	user, room, _ := setupReactionTest(t, chatto, ctx)
@@ -667,15 +663,13 @@ func TestAssetEventTimelineTargetResolvesDeletedProcessedDerivative(t *testing.T
 }
 
 func TestPlanRealtimeReplayResetsForDifferentStreamIncarnation(t *testing.T) {
-	t.Parallel()
-
 	chatto, _ := setupTestCore(t)
 	ctx := testContext(t)
 	cursor, err := chatto.encodeRealtimeCursor("user", "evt-incarnation-v1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", 0)
 	if err != nil {
 		t.Fatalf("encodeRealtimeCursor: %v", err)
 	}
-	plan, err := chatto.PlanRealtimeReplay(ctx, "user", cursor)
+	plan, err := chatto.PlanRealtimeReplay(ctx, "user", cursor, nil)
 	if err != nil {
 		t.Fatalf("PlanRealtimeReplay: %v", err)
 	}
@@ -685,8 +679,6 @@ func TestPlanRealtimeReplayResetsForDifferentStreamIncarnation(t *testing.T) {
 }
 
 func TestPlanRealtimeReplayResetsAfterUserKeyShredding(t *testing.T) {
-	t.Parallel()
-
 	chatto, _ := setupTestCore(t)
 	ctx := testContext(t)
 	viewer, err := chatto.CreateUser(ctx, SystemActorID, "replay-shred-viewer", "Replay Shred Viewer", "password123")
@@ -709,7 +701,7 @@ func TestPlanRealtimeReplayResetsAfterUserKeyShredding(t *testing.T) {
 	if _, err := chatto.PostMessage(ctx, KindChannel, room.Id, author.Id, "must be purged", nil, "", "", nil, false); err != nil {
 		t.Fatalf("PostMessage: %v", err)
 	}
-	boundary, err := chatto.PlanRealtimeReplay(ctx, viewer.Id, "")
+	boundary, err := chatto.PlanRealtimeReplay(ctx, viewer.Id, "", nil)
 	if err != nil {
 		t.Fatalf("initial PlanRealtimeReplay: %v", err)
 	}
@@ -717,7 +709,7 @@ func TestPlanRealtimeReplayResetsAfterUserKeyShredding(t *testing.T) {
 		t.Fatalf("DeleteUser author: %v", err)
 	}
 
-	plan, err := chatto.PlanRealtimeReplay(ctx, viewer.Id, boundary.BoundaryCursor)
+	plan, err := chatto.PlanRealtimeReplay(ctx, viewer.Id, boundary.BoundaryCursor, nil)
 	if err != nil {
 		t.Fatalf("PlanRealtimeReplay: %v", err)
 	}
@@ -727,13 +719,11 @@ func TestPlanRealtimeReplayResetsAfterUserKeyShredding(t *testing.T) {
 }
 
 func TestPlanRealtimeReplayDeliversViewerLeaveAfterVisibilityCloses(t *testing.T) {
-	t.Parallel()
-
 	chatto, _ := setupTestCore(t)
 	ctx := testContext(t)
 	viewer, room, _ := setupReactionTest(t, chatto, ctx)
 
-	boundary, err := chatto.PlanRealtimeReplay(ctx, viewer.Id, "")
+	boundary, err := chatto.PlanRealtimeReplay(ctx, viewer.Id, "", nil)
 	if err != nil {
 		t.Fatalf("initial PlanRealtimeReplay: %v", err)
 	}
@@ -741,7 +731,7 @@ func TestPlanRealtimeReplayDeliversViewerLeaveAfterVisibilityCloses(t *testing.T
 		t.Fatalf("LeaveRoom: %v", err)
 	}
 
-	plan, err := chatto.PlanRealtimeReplay(ctx, viewer.Id, boundary.BoundaryCursor)
+	plan, err := chatto.PlanRealtimeReplay(ctx, viewer.Id, boundary.BoundaryCursor, nil)
 	if err != nil {
 		t.Fatalf("PlanRealtimeReplay: %v", err)
 	}
@@ -751,8 +741,6 @@ func TestPlanRealtimeReplayDeliversViewerLeaveAfterVisibilityCloses(t *testing.T
 }
 
 func TestPlanRealtimeReplayResetsForRoomCreationWithoutCurrentMembership(t *testing.T) {
-	t.Parallel()
-
 	chatto, _ := setupTestCore(t)
 	ctx := testContext(t)
 	viewer, err := chatto.CreateUser(ctx, SystemActorID, "replay-room-create-viewer", "Replay Room Create Viewer", "password123")
@@ -763,7 +751,7 @@ func TestPlanRealtimeReplayResetsForRoomCreationWithoutCurrentMembership(t *test
 	if err != nil {
 		t.Fatalf("CreateUser owner: %v", err)
 	}
-	boundary, err := chatto.PlanRealtimeReplay(ctx, viewer.Id, "")
+	boundary, err := chatto.PlanRealtimeReplay(ctx, viewer.Id, "", nil)
 	if err != nil {
 		t.Fatalf("initial PlanRealtimeReplay: %v", err)
 	}
@@ -771,7 +759,7 @@ func TestPlanRealtimeReplayResetsForRoomCreationWithoutCurrentMembership(t *test
 		t.Fatalf("CreateRoom: %v", err)
 	}
 
-	plan, err := chatto.PlanRealtimeReplay(ctx, viewer.Id, boundary.BoundaryCursor)
+	plan, err := chatto.PlanRealtimeReplay(ctx, viewer.Id, boundary.BoundaryCursor, nil)
 	if err != nil {
 		t.Fatalf("PlanRealtimeReplay: %v", err)
 	}
@@ -781,8 +769,6 @@ func TestPlanRealtimeReplayResetsForRoomCreationWithoutCurrentMembership(t *test
 }
 
 func TestPlanRealtimeReplayOmitsMessagesWithoutAReadMode(t *testing.T) {
-	t.Parallel()
-
 	chatto, _ := setupTestCore(t)
 	ctx := testContext(t)
 	viewer, room, _ := setupReactionTest(t, chatto, ctx)
@@ -793,7 +779,7 @@ func TestPlanRealtimeReplayOmitsMessagesWithoutAReadMode(t *testing.T) {
 	if err := chatto.DenyRoomPermission(ctx, SystemActorID, room.Id, RoleEveryone, PermMessageReadInteractions); err != nil {
 		t.Fatalf("DenyRoomPermission message.read-interactions: %v", err)
 	}
-	boundary, err := chatto.PlanRealtimeReplay(ctx, viewer.Id, "")
+	boundary, err := chatto.PlanRealtimeReplay(ctx, viewer.Id, "", nil)
 	if err != nil {
 		t.Fatalf("initial PlanRealtimeReplay: %v", err)
 	}
@@ -801,7 +787,7 @@ func TestPlanRealtimeReplayOmitsMessagesWithoutAReadMode(t *testing.T) {
 		t.Fatalf("PostMessage without message.read: %v", err)
 	}
 
-	plan, err := chatto.PlanRealtimeReplay(ctx, viewer.Id, boundary.BoundaryCursor)
+	plan, err := chatto.PlanRealtimeReplay(ctx, viewer.Id, boundary.BoundaryCursor, nil)
 	if err != nil {
 		t.Fatalf("PlanRealtimeReplay: %v", err)
 	}
@@ -816,8 +802,6 @@ func TestPlanRealtimeReplayOmitsMessagesWithoutAReadMode(t *testing.T) {
 }
 
 func TestPlanRealtimeReplayIncludesOnlyRelatedThreadMessages(t *testing.T) {
-	t.Parallel()
-
 	chatto, _ := setupTestCore(t)
 	ctx := testContext(t)
 	viewer, err := chatto.CreateUser(ctx, SystemActorID, "replay-interaction-viewer", "Replay Interaction Viewer", "password123")
@@ -850,7 +834,7 @@ func TestPlanRealtimeReplayIncludesOnlyRelatedThreadMessages(t *testing.T) {
 	if err := chatto.GrantUserRoomPermission(ctx, SystemActorID, room.GetId(), viewer.GetId(), PermMessageReadInteractions); err != nil {
 		t.Fatalf("GrantUserRoomPermission message.read-interactions: %v", err)
 	}
-	boundary, err := chatto.PlanRealtimeReplay(ctx, viewer.GetId(), "")
+	boundary, err := chatto.PlanRealtimeReplay(ctx, viewer.GetId(), "", nil)
 	if err != nil {
 		t.Fatalf("initial PlanRealtimeReplay: %v", err)
 	}
@@ -877,7 +861,7 @@ func TestPlanRealtimeReplayIncludesOnlyRelatedThreadMessages(t *testing.T) {
 		t.Fatalf("AddReaction unrelated root = %v, %v", added, err)
 	}
 
-	plan, err := chatto.PlanRealtimeReplay(ctx, viewer.GetId(), boundary.BoundaryCursor)
+	plan, err := chatto.PlanRealtimeReplay(ctx, viewer.GetId(), boundary.BoundaryCursor, nil)
 	if err != nil {
 		t.Fatalf("PlanRealtimeReplay interactions: %v", err)
 	}
@@ -902,8 +886,6 @@ func TestPlanRealtimeReplayIncludesOnlyRelatedThreadMessages(t *testing.T) {
 }
 
 func TestPlanRealtimeReplayOmitsDMMessagesAfterMessageReadDenial(t *testing.T) {
-	t.Parallel()
-
 	chatto, _ := setupTestCore(t)
 	ctx := testContext(t)
 	admin, err := chatto.CreateUser(ctx, SystemActorID, "replay-dm-admin", "Replay DM Admin", "password123")
@@ -928,7 +910,7 @@ func TestPlanRealtimeReplayOmitsDMMessagesAfterMessageReadDenial(t *testing.T) {
 	if err := chatto.SetUserPermissionState(ctx, admin.GetId(), viewer.GetId(), PermissionTargetScope{Kind: MatrixScopeDM}, PermMessageRead, PermissionStateDeny); err != nil {
 		t.Fatalf("deny DM message.read: %v", err)
 	}
-	boundary, err := chatto.PlanRealtimeReplay(ctx, viewer.GetId(), "")
+	boundary, err := chatto.PlanRealtimeReplay(ctx, viewer.GetId(), "", nil)
 	if err != nil {
 		t.Fatalf("initial PlanRealtimeReplay: %v", err)
 	}
@@ -937,7 +919,7 @@ func TestPlanRealtimeReplayOmitsDMMessagesAfterMessageReadDenial(t *testing.T) {
 		t.Fatalf("PostMessage: %v", err)
 	}
 
-	plan, err := chatto.PlanRealtimeReplay(ctx, viewer.GetId(), boundary.BoundaryCursor)
+	plan, err := chatto.PlanRealtimeReplay(ctx, viewer.GetId(), boundary.BoundaryCursor, nil)
 	if err != nil {
 		t.Fatalf("PlanRealtimeReplay: %v", err)
 	}
@@ -957,8 +939,6 @@ func TestPlanRealtimeReplayOmitsDMMessagesAfterMessageReadDenial(t *testing.T) {
 }
 
 func TestRealtimeReplayRequiresResetForServerProjectionAggregates(t *testing.T) {
-	t.Parallel()
-
 	for _, subject := range []string{
 		"evt.group.G1.room_group_updated",
 		"evt.layout.default.room_moved",
@@ -976,15 +956,13 @@ func TestRealtimeReplayRequiresResetForServerProjectionAggregates(t *testing.T) 
 }
 
 func TestPlanRealtimeReplayIncludesDurableUserPreferences(t *testing.T) {
-	t.Parallel()
-
 	chatto, _ := setupTestCore(t)
 	ctx := testContext(t)
 	user, err := chatto.CreateUser(ctx, SystemActorID, "replay-preferences", "Replay Preferences", "password123")
 	if err != nil {
 		t.Fatalf("CreateUser: %v", err)
 	}
-	before, err := chatto.PlanRealtimeReplay(ctx, user.GetId(), "")
+	before, err := chatto.PlanRealtimeReplay(ctx, user.GetId(), "", nil)
 	if err != nil {
 		t.Fatalf("initial PlanRealtimeReplay: %v", err)
 	}
@@ -993,7 +971,7 @@ func TestPlanRealtimeReplayIncludesDurableUserPreferences(t *testing.T) {
 		t.Fatalf("UpdateUserSettings: %v", err)
 	}
 
-	plan, err := chatto.PlanRealtimeReplay(ctx, user.GetId(), before.BoundaryCursor)
+	plan, err := chatto.PlanRealtimeReplay(ctx, user.GetId(), before.BoundaryCursor, nil)
 	if err != nil {
 		t.Fatalf("PlanRealtimeReplay: %v", err)
 	}
@@ -1013,13 +991,11 @@ func TestPlanRealtimeReplayIncludesDurableUserPreferences(t *testing.T) {
 }
 
 func TestPlanRealtimeReplayResetsForUnknownFutureEvent(t *testing.T) {
-	t.Parallel()
-
 	chatto, nc := setupTestCore(t)
 	ctx := testContext(t)
 	const userID = "future-event-viewer"
 
-	before, err := chatto.PlanRealtimeReplay(ctx, userID, "")
+	before, err := chatto.PlanRealtimeReplay(ctx, userID, "", nil)
 	if err != nil {
 		t.Fatalf("initial PlanRealtimeReplay: %v", err)
 	}
@@ -1033,23 +1009,21 @@ func TestPlanRealtimeReplayResetsForUnknownFutureEvent(t *testing.T) {
 		t.Fatalf("publish future EVT event: %v", err)
 	}
 
-	plan, err := chatto.PlanRealtimeReplay(ctx, userID, before.BoundaryCursor)
+	plan, err := chatto.PlanRealtimeReplay(ctx, userID, before.BoundaryCursor, nil)
 	if err != nil {
 		t.Fatalf("PlanRealtimeReplay after future event: %v", err)
 	}
-	if !plan.Reset || !plan.HadSequenceGap || len(plan.Events) != 0 {
+	if !plan.Reset || len(plan.Events) != 0 {
 		t.Fatalf("future event replay = %+v, want exact snapshot fallback", plan)
 	}
 }
 
 func TestPlanRealtimeReplayResetsForUnknownAggregateNamespace(t *testing.T) {
-	t.Parallel()
-
 	chatto, nc := setupTestCore(t)
 	ctx := testContext(t)
 	const userID = "future-aggregate-viewer"
 
-	before, err := chatto.PlanRealtimeReplay(ctx, userID, "")
+	before, err := chatto.PlanRealtimeReplay(ctx, userID, "", nil)
 	if err != nil {
 		t.Fatalf("initial PlanRealtimeReplay: %v", err)
 	}
@@ -1072,23 +1046,21 @@ func TestPlanRealtimeReplayResetsForUnknownAggregateNamespace(t *testing.T) {
 		t.Fatalf("publish future aggregate event: %v", err)
 	}
 
-	plan, err := chatto.PlanRealtimeReplay(ctx, userID, before.BoundaryCursor)
+	plan, err := chatto.PlanRealtimeReplay(ctx, userID, before.BoundaryCursor, nil)
 	if err != nil {
 		t.Fatalf("PlanRealtimeReplay after future aggregate: %v", err)
 	}
-	if !plan.Reset || !plan.HadSequenceGap || len(plan.Events) != 0 {
+	if !plan.Reset || len(plan.Events) != 0 {
 		t.Fatalf("future aggregate replay = %+v, want exact snapshot fallback", plan)
 	}
 }
 
 func TestPlanRealtimeReplayResetsForMismatchedUserSubject(t *testing.T) {
-	t.Parallel()
-
 	chatto, nc := setupTestCore(t)
 	ctx := testContext(t)
 	const userID = "mismatched-user-subject-viewer"
 
-	before, err := chatto.PlanRealtimeReplay(ctx, userID, "")
+	before, err := chatto.PlanRealtimeReplay(ctx, userID, "", nil)
 	if err != nil {
 		t.Fatalf("initial PlanRealtimeReplay: %v", err)
 	}
@@ -1111,18 +1083,16 @@ func TestPlanRealtimeReplayResetsForMismatchedUserSubject(t *testing.T) {
 		t.Fatalf("publish mismatched user event: %v", err)
 	}
 
-	plan, err := chatto.PlanRealtimeReplay(ctx, userID, before.BoundaryCursor)
+	plan, err := chatto.PlanRealtimeReplay(ctx, userID, before.BoundaryCursor, nil)
 	if err != nil {
 		t.Fatalf("PlanRealtimeReplay after mismatched user event: %v", err)
 	}
-	if !plan.Reset || !plan.HadSequenceGap || len(plan.Events) != 0 {
+	if !plan.Reset || len(plan.Events) != 0 {
 		t.Fatalf("mismatched user replay = %+v, want exact snapshot fallback", plan)
 	}
 }
 
 func TestRealtimeReplayRoomSubject(t *testing.T) {
-	t.Parallel()
-
 	roomID, ok := realtimeReplayRoomSubject(evtstream.RoomAggregate("R1").SubjectFor(&evtv1.Event{
 		Event: &evtv1.Event_ReactionAdded{ReactionAdded: &evtv1.ReactionAddedEvent{}},
 	}))

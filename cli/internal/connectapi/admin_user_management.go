@@ -5,11 +5,12 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/chattocorp/chatto/cli/internal/readmodel"
+
 	"connectrpc.com/connect"
 	"github.com/chattocorp/chatto/cli/internal/core"
 	adminv1 "github.com/chattocorp/chatto/cli/internal/pb/chatto/admin/v1"
 	apiv1 "github.com/chattocorp/chatto/cli/internal/pb/chatto/api/v1"
-	evtv1 "github.com/chattocorp/chatto/cli/internal/pb/chatto/core/evt/v1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -101,6 +102,24 @@ func (s *adminUserManagementService) BatchGetMembers(ctx context.Context, req *c
 		return nil, err
 	}
 	return connect.NewResponse(response), nil
+}
+
+func (s *adminUserManagementService) GetUserRoleAssignments(ctx context.Context, req *connect.Request[adminv1.GetUserRoleAssignmentsRequest]) (*connect.Response[adminv1.GetUserRoleAssignmentsResponse], error) {
+	caller, err := requireCaller(ctx)
+	if err != nil {
+		return nil, err
+	}
+	assignments, err := s.api.core.GetUserRoleAssignments(ctx, caller.UserID, req.Msg.GetUserId())
+	if err != nil {
+		return nil, err
+	}
+	return connect.NewResponse(&adminv1.GetUserRoleAssignmentsResponse{
+		Assignments: &adminv1.UserRoleAssignments{
+			UserId: assignments.UserID, RoleNames: assignments.RoleNames,
+			AssignableRoleNames: assignments.AssignableRoleNames,
+			RevocableRoleNames:  assignments.RevocableRoleNames,
+		},
+	}), nil
 }
 
 func (s *adminUserManagementService) AssignRole(ctx context.Context, req *connect.Request[adminv1.AssignRoleRequest]) (*connect.Response[adminv1.AssignRoleResponse], error) {
@@ -195,6 +214,21 @@ func (s *adminUserManagementService) ClearUsernameCooldown(ctx context.Context, 
 	return connect.NewResponse(&adminv1.ClearUsernameCooldownResponse{}), nil
 }
 
+func (s *adminUserManagementService) SetUserDeactivated(ctx context.Context, req *connect.Request[adminv1.SetUserDeactivatedRequest]) (*connect.Response[adminv1.SetUserDeactivatedResponse], error) {
+	caller, err := requireCaller(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.api.core.SetUserDeactivated(ctx, caller.UserID, req.Msg.GetUserId(), req.Msg.GetDeactivated()); err != nil {
+		return nil, err
+	}
+	member, err := s.adminMemberAfterMutation(ctx, caller.UserID, req.Msg.GetUserId())
+	if err != nil {
+		return nil, err
+	}
+	return connect.NewResponse(&adminv1.SetUserDeactivatedResponse{Member: member}), nil
+}
+
 func (s *adminUserManagementService) DeleteUser(ctx context.Context, req *connect.Request[adminv1.DeleteUserRequest]) (*connect.Response[adminv1.DeleteUserResponse], error) {
 	caller, err := requireCaller(ctx)
 	if err != nil {
@@ -226,12 +260,14 @@ func (s *adminUserManagementService) adminMember(ctx context.Context, member cor
 
 func (s *adminUserManagementService) adminMemberWithPresence(ctx context.Context, member core.AdminMember, presence string) *adminv1.AdminMember {
 	response := &adminv1.AdminMember{
-		Roles:                  append([]string{}, member.Roles...),
-		CreatedAt:              member.CreatedAt,
-		HasVerifiedEmail:       member.HasVerifiedEmail,
-		VerifiedEmails:         append([]string{}, member.VerifiedEmails...),
-		ViewerCanDeleteAccount: member.ViewerCanDeleteAccount,
-		User:                   adminMemberUserWithPresence(member, presence),
+		Roles:                       append([]string{}, member.Roles...),
+		CreatedAt:                   member.CreatedAt,
+		HasVerifiedEmail:            member.HasVerifiedEmail,
+		VerifiedEmails:              append([]string{}, member.VerifiedEmails...),
+		ViewerCanDeleteAccount:      member.ViewerCanDeleteAccount,
+		Deactivated:                 member.Deactivated,
+		ViewerCanChangeDeactivation: new(member.ViewerCanChangeDeactivation),
+		User:                        adminMemberUserWithPresence(member, presence),
 	}
 	if member.AvatarURL != "" {
 		response.User.AvatarUrl = new(s.api.absolutizeServerURL(ctx, member.AvatarURL))
@@ -251,11 +287,18 @@ func adminMemberUserWithPresence(member core.AdminMember, presence string) *apiv
 		Login:          member.Login,
 		DisplayName:    member.DisplayName,
 		Deleted:        member.Deleted,
+		Deactivated:    member.Deactivated,
 		PresenceStatus: corePresenceStatusToAPI(presence),
 		CustomStatus:   coreCustomStatusToAPI(member.CustomStatus),
 	}
 	if member.IsBot && !member.Deleted {
 		summary.Bot = &apiv1.BotInfo{OwnerUserId: member.BotOwnerUserID}
+	}
+	if member.Bio != "" {
+		summary.Bio = new(member.Bio)
+	}
+	if member.SharedTimezone != "" {
+		summary.Timezone = new(member.SharedTimezone)
 	}
 	return summary
 }
@@ -268,7 +311,7 @@ func (s *adminUserManagementService) adminMemberAfterMutation(ctx context.Contex
 	return s.adminMemberAfterMutationForUser(ctx, actorID, user)
 }
 
-func (s *adminUserManagementService) adminMemberAfterMutationForUser(ctx context.Context, actorID string, user *evtv1.User) (*adminv1.AdminMember, error) {
+func (s *adminUserManagementService) adminMemberAfterMutationForUser(ctx context.Context, actorID string, user *readmodel.User) (*adminv1.AdminMember, error) {
 	if user == nil {
 		return nil, core.ErrNotFound
 	}
@@ -288,9 +331,10 @@ func (s *adminUserManagementService) adminMemberAfterMutationForUser(ctx context
 		return nil, err
 	}
 	response := &adminv1.AdminMember{
-		Roles:     append([]string{}, roles...),
-		CreatedAt: user.GetCreatedAt(),
-		User:      apiUser,
+		Roles:       append([]string{}, roles...),
+		CreatedAt:   user.GetCreatedAt(),
+		User:        apiUser,
+		Deactivated: user.GetDeactivated(),
 	}
 	return response, nil
 }
@@ -306,21 +350,10 @@ func publicAPIRoleFromAdminMemberSummary(role core.AdminMemberRoleSummary) *apiv
 	}
 }
 
-func adminAPIRolesFromAdminMemberRoles(roles []core.AdminMemberRole) []*adminv1.AdminRole {
+func adminAPIRolesFromAdminMemberRoles(roles []core.AdminMemberRoleSummary) []*adminv1.AdminRole {
 	out := make([]*adminv1.AdminRole, 0, len(roles))
 	for _, role := range roles {
-		out = append(out, &adminv1.AdminRole{
-			Role: &apiv1.Role{
-				Name:        role.Name,
-				DisplayName: role.DisplayName,
-				Description: role.Description,
-				IsSystem:    role.IsSystem,
-				Position:    role.Position,
-				Pingable:    role.Pingable,
-			},
-			Permissions:       corePermissionsToStrings(role.Permissions),
-			PermissionDenials: corePermissionsToStrings(role.PermissionDenials),
-		})
+		out = append(out, &adminv1.AdminRole{Role: publicAPIRoleFromAdminMemberSummary(role)})
 	}
 	return out
 }
