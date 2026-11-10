@@ -42,6 +42,7 @@ final class AuthorizationSession: NSObject, NSApplicationDelegate, NSWindowDeleg
   private let url: URL
   private let window: NSWindow
   private var session: ASWebAuthenticationSession?
+  private var termination: DispatchSourceSignal?
 
   /// Runs the complete command and exits the process.
   static func main() -> Never {
@@ -88,7 +89,21 @@ final class AuthorizationSession: NSObject, NSApplicationDelegate, NSWindowDeleg
       Self.fail("The sign-in session could not be started.", status: 1)
     }
     Timer.scheduledTimer(withTimeInterval: AuthorizationRequest.timeout, repeats: false) { _ in
-      Task { @MainActor in Self.fail("The sign-in attempt timed out.", status: 1) }
+      Task { @MainActor in self.cancelSession() }
+    }
+    signal(SIGTERM, SIG_IGN)
+    let termination = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+    termination.setEventHandler { [weak self] in self?.cancelSession() }
+    termination.resume()
+    self.termination = termination
+  }
+
+  /// Exiting without cancelling leaves the browser sheet open, and macOS then
+  /// stalls the next session. Cancelling ends it; the completion handler exits.
+  private func cancelSession() {
+    session?.cancel()
+    Timer.scheduledTimer(withTimeInterval: 2, repeats: false) { _ in
+      Self.fail("Sign-in was cancelled.", status: 1)
     }
   }
 
@@ -112,11 +127,11 @@ final class AuthorizationSession: NSObject, NSApplicationDelegate, NSWindowDeleg
   }
 
   @objc private func cancel() {
-    Self.fail("Sign-in was cancelled.", status: 1)
+    cancelSession()
   }
 
   func windowWillClose(_ notification: Notification) {
-    Self.fail("Sign-in was cancelled.", status: 1)
+    cancelSession()
   }
 
   func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
