@@ -40,6 +40,7 @@ const gameCaptureListSourcesChannel = 'chatto:game-capture:list-sources';
 const gameCaptureCancelListSourcesChannel = 'chatto:game-capture:cancel-list-sources';
 const gameCaptureStartChannel = 'chatto:game-capture:start';
 const gameCapturePublisherChannel = 'chatto:game-capture:publisher';
+const authorizationChannel = 'chatto:authorization:authorize';
 
 ipcRenderer.on(gameCapturePublisherChannel, (event, message) => {
   if (typeof message?.requestId !== 'string' || event.ports.length !== 1) return;
@@ -53,6 +54,11 @@ ipcRenderer.on(gameCapturePublisherChannel, (event, message) => {
 contextBridge.exposeInMainWorld(
   'chattoDesktop',
   Object.freeze({
+    authorization: process.argv.includes('--chatto-native-authorization')
+      ? Object.freeze({
+          authorize: (url) => ipcRenderer.invoke(authorizationChannel, String(url))
+        })
+      : undefined,
     updates: Object.freeze({
       getStatus: () => ipcRenderer.invoke('chatto:updates:status'),
       check: () => ipcRenderer.invoke('chatto:updates:check'),

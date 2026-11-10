@@ -6,6 +6,8 @@ import type {
 import type { DesktopUpdatesBridge } from './updates.svelte';
 
 export interface ChattoDesktopBridge {
+  /** System-browser sign-in; see `nativeAuthorization.ts`. */
+  authorization?: { authorize(url: string): Promise<string> };
   updates?: DesktopUpdatesBridge;
   /** Native alerts carry opaque click IDs, never host-provided navigation URLs. */
   notifications?: {

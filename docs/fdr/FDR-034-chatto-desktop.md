@@ -45,7 +45,10 @@ system-browser authentication, and clean-machine media behavior are hardened.
   The provider still owns its login page in a separate window. Servers that
   do not support the provider hint show their normal login page instead.
   **Continue in the browser** opens the existing PKCE-protected OAuth window
-  for external providers, account creation, and password recovery. Browser
+  for external providers, account creation, and password recovery. On macOS,
+  the native helper opens these OAuth flows in a system browser authentication
+  session instead, so passkeys and the person's existing browser sessions work.
+  Browser
   deployments continue to use the server-owned OAuth pages for remote login.
 - The sign-in screen reuses the web authentication layout and server branding.
   When direct registration is enabled, **Create account** opens the server's
@@ -206,8 +209,11 @@ system-browser authentication, and clean-machine media behavior are hardened.
 - Servers recognize the built-in `chatto://desktop` OAuth client and its exact
   callback. Desktop API and realtime access use bearer credentials and require
   no origin configuration.
-- Identity providers that reject embedded user agents are not supported until
-  Chatto Desktop gains a system-browser authorization handoff.
+- The macOS helper accepts only an authorization URL for the built-in desktop
+  client and returns only its exact callback. The OAuth state and PKCE verifier
+  stay in the renderer, which validates the callback and exchanges the code.
+  Identity providers that reject embedded user agents are not supported on
+  Windows and Linux.
 
 ## Design Decisions
 
@@ -275,9 +281,13 @@ server, which owns provider selection and account mapping. Registration and
 recovery also use the server-owned OAuth window and its existing PKCE and
 callback handling. Selecting a provider contacts that provider and reveals
 the user's IP address to it. No provider connection starts from displaying
-the buttons alone. Some providers
-require a future system-browser flow, and the host
-must tightly constrain popup and navigation behavior. The host opens a new
+the buttons alone. Electron's embedded renderer cannot use platform passkeys,
+so on macOS the embedded helper's `authorize` command runs these OAuth flows
+in `ASWebAuthenticationSession` for the same built-in desktop client and
+callback. The session delivers the private-scheme callback to the starting
+process without registering `chatto` with the operating system, and macOS asks
+for consent to use the server's domain. Windows and Linux keep the Electron
+window, and the host must tightly constrain popup and navigation behavior. The host opens a new
 window only on the frontend's `/servers/authorize` launch page and sends all
 other window requests to the system browser.
 
@@ -416,7 +426,7 @@ The iOS shell shares the frontend but uses native system authentication. See
 ## Open Questions
 
 - How system-browser OAuth callbacks and normal external links should return to
-  or focus the application on every platform.
+  or focus the application on Windows and Linux.
 - Which Linux distribution packages should accompany the AppImage and tarball.
 - Whether Electron's shipped codec set covers every media artifact Chatto
   currently generates on every supported platform.

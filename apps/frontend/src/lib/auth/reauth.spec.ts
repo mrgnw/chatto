@@ -25,8 +25,14 @@ vi.mock('$lib/serverCatalogue', () => ({
 
 vi.mock('$lib/desktop/nativeAuthorization', async (importOriginal) => ({
   ...(await importOriginal<typeof import('$lib/desktop/nativeAuthorization')>()),
-  hasNativeAuthorization: () => native.available,
-  authorizeNatively: native.authorize
+  nativeAuthorization: () =>
+    native.available
+      ? {
+          clientId: 'eu.chattocorp.chatto.mobile',
+          callback: 'eu.chattocorp.chatto.mobile:/oauth/callback',
+          authorize: native.authorize
+        }
+      : null
 }));
 
 const {
