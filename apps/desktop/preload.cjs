@@ -81,6 +81,13 @@ contextBridge.exposeInMainWorld(
         return () => ipcRenderer.removeListener('chatto:notifications:click', listener);
       }
     }),
+    authorization: process.argv.includes('--chatto-native-authorization')
+      ? Object.freeze({
+          authorize: (url, attemptId) =>
+            ipcRenderer.invoke('chatto:authorization:authorize', url, attemptId),
+          cancel: (attemptId) => ipcRenderer.invoke('chatto:authorization:cancel', attemptId)
+        })
+      : undefined,
     onAuthorizationWindowClosed: (callback) => {
       const listener = (_event, frameName) => callback(frameName);
       ipcRenderer.on('chatto:authorization:closed', listener);

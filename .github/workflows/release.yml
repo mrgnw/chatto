@@ -536,7 +536,7 @@ jobs:
         run: |
           artifact_arch="${CHATTO_DESKTOP_ARCH:-$RUNNER_ARCH}"
           artifact_arch="$(echo "$artifact_arch" | tr '[:lower:]' '[:upper:]')"
-          helper="apps/desktop/dist/Chatto.app/Contents/Helpers/Chatto Capture Helper.app/Contents/MacOS/chatto-macos-capture-probe"
+          helper="apps/desktop/dist/Chatto.app/Contents/Helpers/Chatto Helper.app/Contents/MacOS/chatto-macos-capture-probe"
           test -x "$helper"
           codesign --verify --deep --strict --verbose=2 "apps/desktop/dist/Chatto.app"
           # desktop-build staples and validates the app with bounded network retries.

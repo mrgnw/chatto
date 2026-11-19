@@ -1,8 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { RegisteredServer } from '@chatto/client/server/registry';
 import { authorizationLaunchTarget } from '$lib/test-utils/authorizationWindow';
+import { OAuthPopupError } from '$lib/oauth/popupError';
 
-const native = vi.hoisted(() => ({ available: false, authorize: vi.fn() }));
+const native = vi.hoisted(() => ({
+  available: false,
+  authorize: vi.fn(),
+  cancel: undefined as ((attemptId: string) => Promise<void>) | undefined,
+  clientId: 'eu.chattocorp.chatto.mobile',
+  callback: 'eu.chattocorp.chatto.mobile:/oauth/callback'
+}));
 const activeServer = vi.hoisted(() => ({ id: 'origin' }));
 vi.mock('$lib/state/activeServer.svelte', () => ({ getActiveServer: () => activeServer.id }));
 vi.mock('$lib/client', async () => ({
@@ -25,8 +32,15 @@ vi.mock('$lib/serverCatalogue', () => ({
 
 vi.mock('$lib/desktop/nativeAuthorization', async (importOriginal) => ({
   ...(await importOriginal<typeof import('$lib/desktop/nativeAuthorization')>()),
-  hasNativeAuthorization: () => native.available,
-  authorizeNatively: native.authorize
+  nativeAuthorization: () =>
+    native.available
+      ? {
+          clientId: native.clientId,
+          callback: native.callback,
+          authorize: native.authorize,
+          cancel: native.cancel
+        }
+      : null
 }));
 
 const {
@@ -173,6 +187,9 @@ describe('remote server OAuth popup', () => {
     });
     native.available = false;
     native.authorize.mockReset();
+    native.cancel = undefined;
+    native.clientId = 'eu.chattocorp.chatto.mobile';
+    native.callback = 'eu.chattocorp.chatto.mobile:/oauth/callback';
   });
 
   afterEach(() => {
@@ -256,6 +273,192 @@ describe('remote server OAuth popup', () => {
     await expect(startRemoteReauthentication(remote)).rejects.toThrow('Sign-in cancelled');
     expect(exchange).not.toHaveBeenCalled();
     expect(replaceServerAuthenticationMock).not.toHaveBeenCalled();
+  });
+
+  describe('with a host that can cancel', () => {
+    beforeEach(() => {
+      native.available = true;
+      native.clientId = 'chatto://desktop';
+      native.callback = 'chatto://desktop/servers/callback?mode=popup';
+    });
+
+    it('signs in with the Desktop client and the attempt state as its ID', async () => {
+      native.cancel = vi.fn(async () => {});
+      native.authorize.mockImplementation(async (raw: string, state: string) => {
+        const url = new URL(raw);
+        expect(url.searchParams.get('client_id')).toBe('chatto://desktop');
+        expect(url.searchParams.get('redirect_uri')).toBe(
+          'chatto://desktop/servers/callback?mode=popup'
+        );
+        return { state, code: 'native-code', iss: 'https://remote.example' };
+      });
+      const exchange = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) =>
+        tokenResponse()
+      );
+      vi.stubGlobal('fetch', exchange);
+      const { startRemoteReauthentication, cancelServerOAuthFlow } = await import('./reauth');
+
+      await startRemoteReauthentication(remote);
+
+      expect(JSON.parse(exchange.mock.calls[0]?.[1]?.body as string)).toMatchObject({
+        client_id: 'chatto://desktop',
+        redirect_uri: 'chatto://desktop/servers/callback?mode=popup'
+      });
+      cancelServerOAuthFlow(remote.url);
+      expect(native.cancel).not.toHaveBeenCalled();
+    });
+
+    it('does not exchange a code that a different server issued', async () => {
+      native.cancel = vi.fn(async () => {});
+      native.authorize.mockImplementation(async (_raw: string, state: string) => ({
+        state,
+        code: 'native-code',
+        iss: 'https://other.example'
+      }));
+      const exchange = vi.fn();
+      vi.stubGlobal('fetch', exchange);
+      const { startRemoteReauthentication } = await import('./reauth');
+
+      await expect(startRemoteReauthentication(remote)).rejects.toThrow('different server');
+      expect(exchange).not.toHaveBeenCalled();
+    });
+
+    it('cancels the host attempt by its ID and settles as cancelled', async () => {
+      let attemptId = '';
+      let finish: (error: Error) => void = () => {};
+      native.cancel = vi.fn(async (id: string) => {
+        expect(id).toBe(attemptId);
+        finish(new OAuthPopupError('Sign-in cancelled.', 'cancelled'));
+      });
+      native.authorize.mockImplementation(
+        (_raw: string, state: string) =>
+          new Promise((_, reject) => {
+            attemptId = state;
+            finish = reject;
+          })
+      );
+      const exchange = vi.fn();
+      vi.stubGlobal('fetch', exchange);
+      const { startRemoteReauthentication, cancelServerOAuthFlow } = await import('./reauth');
+      const completion = startRemoteReauthentication(remote);
+      const rejected = expect(completion).rejects.toMatchObject({ reason: 'cancelled' });
+      await vi.waitFor(() => expect(native.authorize).toHaveBeenCalledOnce());
+
+      cancelServerOAuthFlow(remote.url);
+
+      await rejected;
+      expect(native.cancel).toHaveBeenCalledOnce();
+      expect(exchange).not.toHaveBeenCalled();
+      cancelServerOAuthFlow(remote.url);
+      expect(native.cancel).toHaveBeenCalledOnce();
+    });
+
+    it('does not exchange a callback that arrives after the user cancelled', async () => {
+      let deliver: (response: unknown) => void = () => {};
+      native.cancel = vi.fn(async (id: string) => {
+        deliver({ state: id, code: 'native-code', iss: 'https://remote.example' });
+      });
+      native.authorize.mockImplementation(() => new Promise((resolve) => (deliver = resolve)));
+      const exchange = vi.fn();
+      vi.stubGlobal('fetch', exchange);
+      const { startRemoteReauthentication, cancelServerOAuthFlow } = await import('./reauth');
+      const completion = startRemoteReauthentication(remote);
+      const rejected = expect(completion).rejects.toMatchObject({ reason: 'cancelled' });
+      await vi.waitFor(() => expect(native.authorize).toHaveBeenCalledOnce());
+
+      cancelServerOAuthFlow(remote.url);
+
+      await rejected;
+      expect(exchange).not.toHaveBeenCalled();
+      expect(replaceServerAuthenticationMock).not.toHaveBeenCalled();
+    });
+
+    it('offers no cancel once the native session has settled', async () => {
+      native.cancel = vi.fn(async () => {});
+      native.authorize.mockImplementation(async (_raw: string, state: string) => ({
+        state,
+        code: 'native-code',
+        iss: 'https://remote.example'
+      }));
+      let release: (response: Response) => void = () => {};
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(() => new Promise<Response>((resolve) => (release = resolve)))
+      );
+      const { startRemoteReauthentication, cancelServerOAuthFlow } = await import('./reauth');
+      const completion = startRemoteReauthentication(remote);
+      await vi.waitFor(() => expect(fetch).toHaveBeenCalled());
+
+      cancelServerOAuthFlow(remote.url);
+      expect(native.cancel).not.toHaveBeenCalled();
+
+      release(tokenResponse());
+      await completion;
+    });
+
+    it('ends a cancel during discovery without starting the host', async () => {
+      native.cancel = vi.fn(async () => {});
+      let rejectServerInfo: (error: Error) => void = () => {};
+      getPublicServerInfoMock.mockReturnValueOnce(
+        new Promise((_, reject) => (rejectServerInfo = reject))
+      );
+      const unhandled = vi.fn();
+      process.on('unhandledRejection', unhandled);
+      const { startRemoteReauthentication, cancelServerOAuthFlow } = await import('./reauth');
+      const completion = startRemoteReauthentication(remote);
+      const rejected = expect(completion).rejects.toMatchObject({ reason: 'cancelled' });
+
+      cancelServerOAuthFlow(remote.url);
+      await rejected;
+      rejectServerInfo(new Error('discovery failed'));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+
+      process.off('unhandledRejection', unhandled);
+      expect(unhandled).not.toHaveBeenCalled();
+      expect(native.authorize).not.toHaveBeenCalled();
+    });
+
+    it('allows a new attempt after the helper failed', async () => {
+      native.cancel = vi.fn(async () => {});
+      native.authorize.mockRejectedValueOnce(new Error('Sign-in failed.'));
+      native.authorize.mockImplementationOnce(async (_raw: string, state: string) => ({
+        state,
+        code: 'native-code',
+        iss: 'https://remote.example'
+      }));
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => tokenResponse())
+      );
+      const { startRemoteReauthentication, cancelServerOAuthFlow } = await import('./reauth');
+
+      await expect(startRemoteReauthentication(remote)).rejects.toThrow('Sign-in failed.');
+      cancelServerOAuthFlow(remote.url);
+      expect(native.cancel).not.toHaveBeenCalled();
+      await startRemoteReauthentication(remote);
+
+      expect(native.authorize).toHaveBeenCalledTimes(2);
+      expect(replaceServerAuthenticationMock).toHaveBeenCalledOnce();
+    });
+
+    it('does not let an old attempt cancel a later one', async () => {
+      const ids: string[] = [];
+      native.cancel = vi.fn(async () => {});
+      native.authorize.mockImplementation(async (_raw: string, state: string) => {
+        ids.push(state);
+        if (ids.length === 1) throw new Error('Sign-in failed.');
+        return { state, code: 'native-code', iss: 'https://remote.example' };
+      });
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => tokenResponse())
+      );
+      const { startRemoteReauthentication } = await import('./reauth');
+      await expect(startRemoteReauthentication(remote)).rejects.toThrow();
+      await startRemoteReauthentication(remote);
+      expect(ids[0]).not.toBe(ids[1]);
+      expect(native.cancel).not.toHaveBeenCalled();
+    });
   });
 
   it('uses the built-in OAuth client identity for Chatto Desktop', async () => {

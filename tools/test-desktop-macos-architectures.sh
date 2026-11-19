@@ -12,7 +12,7 @@ case "$target" in
 esac
 
 test -x "$bundle/Contents/MacOS/Chatto"
-test -x "$bundle/Contents/Helpers/Chatto Capture Helper.app/Contents/MacOS/chatto-macos-capture-probe"
+test -x "$bundle/Contents/Helpers/Chatto Helper.app/Contents/MacOS/chatto-macos-capture-probe"
 while IFS= read -r -d '' binary; do
   if file -b "$binary" | grep -q 'Mach-O'; then
     for architecture in "${architectures[@]}"; do

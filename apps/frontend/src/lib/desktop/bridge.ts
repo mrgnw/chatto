@@ -6,6 +6,15 @@ import type {
 import type { DesktopUpdatesBridge } from './updates.svelte';
 
 export interface ChattoDesktopBridge {
+  /** System-browser sign-in for HTTPS servers; see `nativeAuthorization.ts`. */
+  authorization?: {
+    authorize(
+      url: string,
+      attemptId: string
+    ): Promise<{ status: 'ok'; url: string } | { status: 'cancelled' | 'failed' }>;
+    /** Resolves after the helper exits; the matching `authorize` then settles `cancelled`. */
+    cancel(attemptId: string): Promise<void>;
+  };
   /** Subscribe to native popup closures, identified by the original window name. */
   onAuthorizationWindowClosed?: (callback: (frameName: string) => void) => () => void;
   updates?: DesktopUpdatesBridge;

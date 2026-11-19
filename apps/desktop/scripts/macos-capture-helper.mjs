@@ -6,7 +6,7 @@ import { chmod, copyFile, cp, mkdir, rm, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-export const macOSCaptureHelperAppName = 'Chatto Capture Helper.app';
+export const macOSCaptureHelperAppName = 'Chatto Helper.app';
 export const macOSCaptureHelperExecutable = 'chatto-macos-capture-probe';
 
 const scriptsRoot = path.dirname(fileURLToPath(import.meta.url));
@@ -87,7 +87,7 @@ function helperInfoPlist({ shortVersion, bundleVersion, bundleIdentifier }) {
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
   <key>CFBundleDisplayName</key>
-  <string>Chatto Capture Helper</string>
+  <string>Chatto Helper</string>
   <key>CFBundleExecutable</key>
   <string>${macOSCaptureHelperExecutable}</string>
   <key>CFBundleIdentifier</key>
@@ -95,7 +95,7 @@ function helperInfoPlist({ shortVersion, bundleVersion, bundleIdentifier }) {
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleName</key>
-  <string>Chatto Capture Helper</string>
+  <string>Chatto Helper</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleShortVersionString</key>

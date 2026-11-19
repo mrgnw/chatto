@@ -39,6 +39,11 @@ import {
   supportsMacOSGameCapture
 } from './game_capture.mjs';
 import { hasAppOrigin, isAuthorizationLaunchUrl, isDesktopPermissionAllowed } from './security.mjs';
+import {
+  authorizationCancelChannel,
+  authorizationStartChannel,
+  createMacOSAuthorization
+} from './authorization.mjs';
 import packageJson from './package.json' with { type: 'json' };
 import { desktopBuildProfile } from './build_profile.mjs';
 import { StreamDiagnostics } from './stream_diagnostics.mjs';
@@ -67,6 +72,7 @@ const frontendRoot = app.isPackaged
   : path.resolve(desktopRoot, '../frontend/build');
 
 let mainWindow;
+const macOSAuthorization = createMacOSAuthorization();
 let activeGameCaptureSession;
 let activeGameCaptureSourceList;
 const gameCaptureSourceOffers = new MacOSGameCaptureSourceOffers();
@@ -131,6 +137,7 @@ async function start() {
   );
   configureSession(session.defaultSession);
   configureGameCaptureIPC();
+  configureAuthorizationIPC();
   ipcMain.handle('chatto:password-login', (event, request) => {
     if (
       !mainWindow ||
@@ -162,9 +169,15 @@ async function start() {
       )
   });
   mainWindow.webContents.on('did-start-navigation', (_event, _url, isInPlace, isMainFrame) => {
-    if (isMainFrame && !isInPlace) notifications.clear();
+    if (isMainFrame && !isInPlace) {
+      notifications.clear();
+      void macOSAuthorization.cancel();
+    }
   });
-  mainWindow.webContents.on('render-process-gone', () => notifications.clear());
+  mainWindow.webContents.on('render-process-gone', () => {
+    notifications.clear();
+    void macOSAuthorization.cancel();
+  });
   app.on('before-quit', () => notifications.clear());
   configureDiagnosticsMenu();
   // Update setup errors must not prevent local startup or expose request URLs.
@@ -193,6 +206,7 @@ async function start() {
     if (process.platform !== 'darwin') app.quit();
   });
   app.on('before-quit', () => {
+    void macOSAuthorization.cancel();
     cancelActiveGameCaptureSourceList();
     stopActiveGameCaptureSession();
   });
@@ -461,7 +475,7 @@ function cancelActiveGameCaptureSourceList() {
 function macOSCaptureHelperExecutable() {
   return path.resolve(
     process.resourcesPath,
-    '../Helpers/Chatto Capture Helper.app/Contents/MacOS/chatto-macos-capture-probe'
+    '../Helpers/Chatto Helper.app/Contents/MacOS/chatto-macos-capture-probe'
   );
 }
 
@@ -521,6 +535,7 @@ function createMainWindow() {
   configureMediaContextMenu(window, Menu);
   window.on('closed', () => {
     if (mainWindow === window) {
+      void macOSAuthorization.cancel();
       cancelActiveGameCaptureSourceList();
       stopActiveGameCaptureSession();
       mainWindow = undefined;
@@ -537,10 +552,35 @@ function mainWindowWebPreferences() {
   // Hidden windows still receive notifications and maintain authenticated connections.
   preferences.backgroundThrottling = false;
   preferences.preload = path.join(desktopRoot, 'preload.cjs');
-  preferences.additionalArguments = isGameCaptureAvailable()
-    ? ['--chatto-native-screen-share']
-    : [];
+  preferences.additionalArguments = [
+    ...(isGameCaptureAvailable() ? ['--chatto-native-screen-share'] : []),
+    ...(hasMacOSHelper() ? ['--chatto-native-authorization'] : [])
+  ];
   return preferences;
+}
+
+function configureAuthorizationIPC() {
+  if (!hasMacOSHelper()) return;
+
+  function isTrusted(event) {
+    return (
+      mainWindow &&
+      !mainWindow.isDestroyed() &&
+      event.sender === mainWindow.webContents &&
+      event.senderFrame &&
+      event.senderFrame === mainWindow.webContents.mainFrame &&
+      hasAppOrigin(event.senderFrame.url)
+    );
+  }
+
+  ipcMain.handle(authorizationStartChannel, (event, url, attemptId) => {
+    if (!isTrusted(event)) return { status: 'failed' };
+    return macOSAuthorization.authorize(macOSCaptureHelperExecutable(), url, attemptId);
+  });
+  ipcMain.handle(authorizationCancelChannel, (event, attemptId) => {
+    if (!isTrusted(event) || typeof attemptId !== 'string') return;
+    return macOSAuthorization.cancel(attemptId);
+  });
 }
 
 function configureGameCaptureIPC() {
@@ -771,13 +811,14 @@ function stopActiveGameCaptureSession() {
   activeGameCaptureSession = undefined;
 }
 
-function isGameCaptureAvailable() {
+function hasMacOSHelper() {
   return (
-    process.platform === 'darwin' &&
-    app.isPackaged &&
-    supportsMacOSGameCapture(process.getSystemVersion()) &&
-    existsSync(macOSCaptureHelperExecutable())
+    process.platform === 'darwin' && app.isPackaged && existsSync(macOSCaptureHelperExecutable())
   );
+}
+
+function isGameCaptureAvailable() {
+  return hasMacOSHelper() && supportsMacOSGameCapture(process.getSystemVersion());
 }
 
 function secureWebPreferences() {

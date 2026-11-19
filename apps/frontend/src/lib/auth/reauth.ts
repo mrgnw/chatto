@@ -19,14 +19,8 @@ import {
   pkceCodeChallenge,
   randomOAuthValue
 } from '@chatto/client/auth/oauth';
-import {
-  authorizeNatively,
-  hasNativeAuthorization,
-  MOBILE_CALLBACK,
-  MOBILE_CLIENT_ID
-} from '$lib/desktop/nativeAuthorization';
+import { DESKTOP_CLIENT_ID, nativeAuthorization } from '$lib/desktop/nativeAuthorization';
 
-const DESKTOP_CLIENT_ID = 'chatto://desktop';
 const FRONTEND_CIMD_PATH = '/oauth/frontend-client-metadata.json';
 
 /** Sign-in completed for a server that is no longer registered. */
@@ -52,22 +46,48 @@ async function runServerOAuthFlow(
 ): Promise<void> {
   const verifier = randomOAuthValue(64);
   const state = randomOAuthValue(32);
-  if (hasNativeAuthorization()) {
-    const info = await serverInfo;
-    if (!info.authorizeUrl) throw new Error('This server does not support OAuth sign-in.');
-    const challenge = await pkceCodeChallenge(verifier);
-    const params = new URLSearchParams({
-      response_type: 'code',
-      client_id: MOBILE_CLIENT_ID,
-      redirect_uri: MOBILE_CALLBACK,
-      code_challenge: challenge,
-      code_challenge_method: 'S256',
-      ...(providerId ? { provider_id: providerId } : {}),
-      ...(providerId && loginHint ? { login_hint: loginHint } : {}),
-      ...(screenHint ? { screen_hint: screenHint } : {}),
-      state
-    });
-    const response = await authorizeNatively(`${serverUrl}${info.authorizeUrl}?${params}`, state);
+  const native = nativeAuthorization(serverUrl);
+  if (native) {
+    const attempt = new AbortController();
+    const abandon = () => {
+      attempt.abort();
+      void native.cancel?.(state).catch(() => {});
+    };
+    // A host that cannot cancel from the page keeps its own cancel control.
+    if (native.cancel) abandonActiveFlows.set(serverUrl, abandon);
+    let info: Awaited<typeof serverInfo>;
+    let response: OAuthPopupResponse;
+    try {
+      // Cancelling while discovery is pending must end the attempt too.
+      const cancelled = new Promise<never>((_, reject) =>
+        attempt.signal.addEventListener(
+          'abort',
+          () => reject(new OAuthPopupError('Sign-in cancelled.', 'cancelled')),
+          { once: true }
+        )
+      );
+      info = await Promise.race([serverInfo, cancelled]);
+      if (!info.authorizeUrl) throw new Error('This server does not support OAuth sign-in.');
+      const challenge = await pkceCodeChallenge(verifier);
+      const params = new URLSearchParams({
+        response_type: 'code',
+        client_id: native.clientId,
+        redirect_uri: native.callback,
+        code_challenge: challenge,
+        code_challenge_method: 'S256',
+        ...(providerId ? { provider_id: providerId } : {}),
+        ...(providerId && loginHint ? { login_hint: loginHint } : {}),
+        ...(screenHint ? { screen_hint: screenHint } : {}),
+        state
+      });
+      if (attempt.signal.aborted) throw new OAuthPopupError('Sign-in cancelled.', 'cancelled');
+      response = await native.authorize(`${serverUrl}${info.authorizeUrl}?${params}`, state);
+    } finally {
+      // Once the native session has settled, cancelling can no longer stop the attempt.
+      if (abandonActiveFlows.get(serverUrl) === abandon) abandonActiveFlows.delete(serverUrl);
+    }
+    // A callback that was already in flight can still resolve after a cancel.
+    if (attempt.signal.aborted) throw new OAuthPopupError('Sign-in cancelled.', 'cancelled');
     requireResponseFromServer(response, serverUrl);
     if (response.error || !response.code) {
       throw new OAuthPopupError(
@@ -79,13 +99,13 @@ async function runServerOAuthFlow(
     const serverId = await completeServerOAuthFlow(
       {
         verifier,
-        clientId: MOBILE_CLIENT_ID,
+        clientId: native.clientId,
         remoteUrl: serverUrl,
         serverName: info.name,
         serverIconUrl: info.iconUrl ?? null
       },
       response.code,
-      MOBILE_CALLBACK
+      native.callback
     );
     await openSignedInServer(serverId);
     return;
