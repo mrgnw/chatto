@@ -1,7 +1,7 @@
 # FDR-034: Chatto Desktop
 
 **Status:** Experimental
-**Last reviewed:** 2026-11-12
+**Last reviewed:** 2026-11-18
 
 ## Overview
 
@@ -44,9 +44,13 @@ system-browser authentication, and clean-machine media behavior are hardened.
   starts the server's PKCE-protected OAuth flow with that provider selected.
   The provider still owns its login page in a separate window. Servers that
   do not support the provider hint show their normal login page instead.
-  **Continue in the browser** opens the existing PKCE-protected OAuth window
-  for external providers, account creation, and password recovery. Browser
-  deployments continue to use the server-owned OAuth pages for remote login.
+  **Continue in the browser** starts the same flow for external providers,
+  account creation, and password recovery. On packaged macOS builds, HTTPS
+  servers use a system browser authentication session so people can use
+  their browser sessions and passkeys. **Cancel sign-in** ends the session
+  and allows another attempt. HTTP servers and other desktop platforms keep
+  the in-app OAuth window. Browser deployments use the server-owned OAuth
+  pages for remote login.
 - The sign-in screen reuses the web authentication layout and server branding.
   When direct registration is enabled, **Create account** opens the server's
   registration page with a pending PKCE authorization. The person enters the
@@ -207,8 +211,9 @@ system-browser authentication, and clean-machine media behavior are hardened.
 - Servers recognize the built-in `chatto://desktop` OAuth client and its exact
   callback. Desktop API and realtime access use bearer credentials and require
   no origin configuration.
-- Identity providers that reject embedded user agents are not supported until
-  Chatto Desktop gains a system-browser authorization handoff.
+- The macOS helper presents the authentication session and returns the exact
+  desktop callback. The renderer holds the PKCE verifier and validates the
+  callback state and server issuer before exchanging the code.
 
 ## Design Decisions
 
@@ -276,10 +281,11 @@ server, which owns provider selection and account mapping. Registration and
 recovery also use the server-owned OAuth window and its existing PKCE and
 callback handling. Selecting a provider contacts that provider and reveals
 the user's IP address to it. No provider connection starts from displaying
-the buttons alone. Some providers
-require a future system-browser flow, and the host
-must tightly constrain popup and navigation behavior. The host opens a new
-window only on the frontend's `/servers/authorize` launch page and sends all
+the buttons alone. Providers such as Pocket ID need access to browser
+passkeys. On macOS, ASWebAuthenticationSession delivers the callback to the
+helper that started the session without registering the Chatto scheme with
+the operating system. For in-app OAuth, the host opens a new window only on
+the frontend's `/servers/authorize` launch page and sends all
 other window requests to the system browser.
 
 ### 5. Synchronize Desktop and Chatto releases
@@ -416,8 +422,8 @@ The iOS shell shares the frontend but uses native system authentication. See
 
 ## Open Questions
 
-- How system-browser OAuth callbacks and normal external links should return to
-  or focus the application on every platform.
+- How system-browser OAuth callbacks should return to the application on Windows and Linux.
+- How normal external links should return to or focus the desktop application.
 - Which Linux distribution packages should accompany the AppImage and tarball.
 - Whether Electron's shipped codec set covers every media artifact Chatto
   currently generates on every supported platform.
